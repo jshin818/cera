@@ -30,12 +30,17 @@ struct Entry {
     path: Utf32String,
 }
 
-/// Immutable switcher index. Rebuild (cheap, ~O(n)) or use `with_changes` on snapshot change.
+/// Switcher index. Rebuilt when titles change; frecency boosts update in place.
 pub struct Switcher {
     entries: Vec<Entry>,
-    /// boost per entry index: 1 + 0.5*frecency_norm + 0.2*pagerank_norm
-    boost: Vec<f32>,
+    /// boost per entry index (f32 bits): 1 + 0.5*frecency_norm + 0.2*pagerank_norm
+    boost: Vec<std::sync::atomic::AtomicU32>,
+    pagerank_part: Vec<f32>,
+    by_id: std::collections::HashMap<u32, usize>,
     titles_lower: Vec<String>,
+    /// Incremental narrowing: the previous query and the entry indices it matched. Typing one
+    /// more character can only shrink the match set, so only those entries are rescored.
+    last: parking_lot::Mutex<Option<(String, std::sync::Arc<Vec<u32>>)>>,
 }
 
 const CHUNK: usize = 4096;
@@ -52,9 +57,22 @@ impl Switcher {
                 path: Utf32String::from(it.path.trim_end_matches(".md")),
             })
             .collect();
-        let boost = entries.iter().map(|e| 1.0 + 0.5 * frecency_norm(e.id) + 0.2 * pagerank_norm(e.id)).collect();
+        let pagerank_part: Vec<f32> = entries.iter().map(|e| 0.2 * pagerank_norm(e.id)).collect();
+        let boost = entries.iter().zip(&pagerank_part).map(|(e, p)| std::sync::atomic::AtomicU32::new((1.0 + 0.5 * frecency_norm(e.id) + p).to_bits())).collect();
         let titles_lower = entries.iter().map(|e| e.title_lower.clone()).collect();
-        Switcher { entries, boost, titles_lower }
+        let by_id = entries.iter().enumerate().map(|(i, e)| (e.id, i)).collect();
+        Switcher { entries, boost, pagerank_part, by_id, titles_lower, last: parking_lot::Mutex::new(None) }
+    }
+
+    fn boost(&self, idx: usize) -> f32 {
+        f32::from_bits(self.boost[idx].load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// Update one note's frecency (normalized 0..1) without rebuilding.
+    pub fn set_frecency(&self, id: u32, frecency_norm: f32) {
+        if let Some(&i) = self.by_id.get(&id) {
+            self.boost[i].store((1.0 + 0.5 * frecency_norm.clamp(0.0, 1.0) + self.pagerank_part[i]).to_bits(), std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -72,9 +90,10 @@ impl Switcher {
             let mut v: Vec<SwitchHit> = self
                 .entries
                 .iter()
-                .zip(&self.boost)
-                .filter(|(_, b)| **b > 1.0)
-                .map(|(e, b)| SwitchHit { id: e.id, score: *b, alias: None, typo: false })
+                .enumerate()
+                .map(|(i, e)| (e, self.boost(i)))
+                .filter(|(_, b)| *b > 1.0)
+                .map(|(e, b)| SwitchHit { id: e.id, score: b, alias: None, typo: false })
                 .collect();
             v.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.id.cmp(&b.id)));
             v.truncate(limit);
@@ -82,15 +101,26 @@ impl Switcher {
         }
         let pattern = Pattern::parse(q, CaseMatching::Ignore, Normalization::Smart);
         let ql = q.to_lowercase();
-        let mut hits: Vec<SwitchHit> = self
-            .entries
+        let prev = {
+            let l = self.last.lock();
+            l.as_ref().filter(|(pq, _)| ql.starts_with(pq.as_str()) && !pq.is_empty() && !pq.contains(['!', '^', '\'', '$', '|'])).map(|(_, v)| v.clone())
+        };
+        let all: Vec<u32>;
+        let cand: &[u32] = match &prev {
+            Some(v) => v,
+            None => {
+                all = (0..self.entries.len() as u32).collect();
+                &all
+            }
+        };
+        let scored: Vec<(u32, SwitchHit)> = cand
             .par_chunks(CHUNK)
-            .enumerate()
-            .flat_map_iter(|(ci, chunk)| {
+            .flat_map_iter(|chunk| {
                 let mut m = Matcher::new(Config::DEFAULT);
                 let mut local = Vec::new();
-                for (k, e) in chunk.iter().enumerate() {
-                    let idx = ci * CHUNK + k;
+                for &idx in chunk {
+                    let idx = idx as usize;
+                    let e = &self.entries[idx];
                     let mut best: Option<(u32, Option<&str>)> = pattern.score(e.title.slice(..), &mut m).map(|s| (s, None));
                     for (a32, a) in &e.aliases {
                         if let Some(s) = pattern.score(a32.slice(..), &mut m) {
@@ -112,18 +142,24 @@ impl Switcher {
                         }
                     }
                     if let Some((s, alias)) = best {
-                        let mut score = s as f32 * self.boost[idx];
+                        let mut score = s as f32 * self.boost(idx);
                         if e.title_lower == ql || alias.is_some_and(|a| a.to_lowercase() == ql) {
                             score += 1.0e9; // exact title (or alias) match always ranks first
                         }
-                        local.push(SwitchHit { id: e.id, score, alias: alias.map(str::to_string), typo: false });
+                        local.push((idx as u32, SwitchHit { id: e.id, score, alias: alias.map(str::to_string), typo: false }));
                     }
                 }
                 local
             })
             .collect();
+        *self.last.lock() = Some((ql.clone(), std::sync::Arc::new(scored.iter().map(|x| x.0).collect())));
+        let mut hits: Vec<SwitchHit> = scored.into_iter().map(|x| x.1).collect();
+        let k = limit.min(hits.len());
+        if k > 0 && k < hits.len() {
+            hits.select_nth_unstable_by(k - 1, |a, b| b.score.total_cmp(&a.score).then(a.id.cmp(&b.id)));
+            hits.truncate(k);
+        }
         hits.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.id.cmp(&b.id)));
-        hits.truncate(limit);
         if hits.len() < 5 && q.chars().count() >= 3 {
             self.typo_fallback(q, &mut hits, limit);
         }

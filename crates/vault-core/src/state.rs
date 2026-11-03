@@ -6,21 +6,51 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
+use crate::intern::{Interner, NONE};
 use vault_parse::{Chunk, LinkKind, LinkResolver, ParsedNote, Resolved, Subpath};
 use vault_search::{Frecency, IndexDoc};
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub const F_EMBED: u8 = 1;
+pub const F_HEADING: u8 = 2;
+pub const F_BLOCK: u8 = 4;
+
+/// A link inside a note, 32 bytes with no heap: strings are interned symbols (see [`Interner`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OutLink {
-    pub target: String,
-    pub subpath: Option<Subpath>,
-    pub display: Option<String>,
-    pub embed: bool,
+    /// Target as written (without subpath or display).
+    pub target: u32,
+    /// Lower-cased target: the unresolved-map key.
+    pub lkey: u32,
+    /// Lower-cased last path segment without .md: the name used for re-resolution.
+    pub name: u32,
+    /// Heading or block id, or NONE.
+    pub sub: u32,
+    pub display: u32,
     pub start: u32,
     pub end: u32,
-    pub dst: Option<u32>,
+    pub dst: u32,
+    pub flags: u8,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+impl OutLink {
+    pub fn dst(&self) -> Option<u32> {
+        (self.dst != NONE).then_some(self.dst)
+    }
+    pub fn embed(&self) -> bool {
+        self.flags & F_EMBED != 0
+    }
+    pub fn subpath(&self, syms: &Interner) -> Option<Subpath> {
+        if self.flags & F_HEADING != 0 {
+            Some(Subpath::Heading(syms.get(self.sub).to_string()))
+        } else if self.flags & F_BLOCK != 0 {
+            Some(Subpath::Block(syms.get(self.sub).to_string()))
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Entry {
     pub id: u32,
     pub path: String,
@@ -37,8 +67,8 @@ pub struct Entry {
     pub word_count: u32,
     pub tasks_open: u32,
     pub tasks_done: u32,
-    #[serde(skip)]
-    pub frontmatter: Option<serde_json::Value>,
+    /// Frontmatter as compact JSON (parsed on demand).
+    pub frontmatter: Option<Arc<str>>,
     /// Sorted, unique source ids that link or embed this file.
     pub backlinks: Vec<u32>,
 }
@@ -53,6 +83,7 @@ impl Entry {
 #[derive(Clone, Default)]
 pub struct Snapshot {
     pub generation: u64,
+    pub syms: Arc<Interner>,
     pub entries: Arc<Vec<Option<Arc<Entry>>>>,
     pub by_path: Arc<HashMap<String, u32>>,
     pub dirs: Arc<Vec<String>>,
@@ -67,6 +98,10 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    pub fn sym(&self, id: u32) -> Arc<str> {
+        self.syms.get(id)
+    }
+
     pub fn get(&self, id: u32) -> Option<&Arc<Entry>> {
         self.entries.get(id as usize).and_then(|e| e.as_ref())
     }
@@ -136,8 +171,10 @@ pub struct State {
     pub by_path: Arc<HashMap<String, u32>>,
     pub resolver: LinkResolver,
     /// lowercase link-target name (last path segment, without .md) -> sources using that name
-    pub by_target_name: HashMap<String, HashSet<u32>>,
-    pub unresolved: HashMap<String, Vec<u32>>,
+    pub by_target_name: HashMap<u32, Vec<u32>>,
+    /// lowercase target symbol -> sources (sorted)
+    pub unresolved: HashMap<u32, Vec<u32>>,
+    pub syms: Arc<Interner>,
     pub dirs: BTreeSet<String>,
     pub frecency: Vec<Frecency>,
     pub pagerank: Vec<f32>,
@@ -171,11 +208,49 @@ fn name_keys(path: &str, aliases: &[String]) -> Vec<String> {
 }
 
 fn link_kind_code(l: &OutLink) -> u8 {
-    match (&l.subpath, l.embed) {
-        (_, true) => 1,
-        (Some(Subpath::Heading(_)), _) => 2,
-        (Some(Subpath::Block(_)), _) => 3,
-        _ => 0,
+    if l.flags & F_EMBED != 0 {
+        1
+    } else if l.flags & F_HEADING != 0 {
+        2
+    } else if l.flags & F_BLOCK != 0 {
+        3
+    } else {
+        0
+    }
+}
+
+fn remove_sorted(v: &mut Vec<u32>, x: u32) {
+    if let Ok(i) = v.binary_search(&x) {
+        v.remove(i);
+    }
+}
+
+fn insert_sorted(v: &mut Vec<u32>, x: u32) {
+    if let Err(i) = v.binary_search(&x) {
+        v.insert(i, x);
+    }
+}
+
+/// Build an interned link from a parsed one.
+pub fn make_link(syms: &Interner, l: &vault_parse::Link) -> OutLink {
+    let (sub, mut flags) = match &l.subpath {
+        Some(Subpath::Heading(h)) => (syms.intern(h), F_HEADING),
+        Some(Subpath::Block(b)) => (syms.intern(b), F_BLOCK),
+        None => (NONE, 0),
+    };
+    if l.kind == LinkKind::Embed {
+        flags |= F_EMBED;
+    }
+    OutLink {
+        target: syms.intern(&l.target),
+        lkey: syms.intern(&l.target.to_lowercase()),
+        name: target_name(&l.target).map(|n| syms.intern(&n)).unwrap_or(NONE),
+        sub,
+        display: syms.opt(l.display.as_deref()),
+        start: l.start,
+        end: l.end,
+        dst: NONE,
+        flags,
     }
 }
 
@@ -226,9 +301,9 @@ impl State {
 
     fn resolve_links(&self, id: u32, path: &str, links: &mut [OutLink]) {
         for l in links.iter_mut() {
-            l.dst = match self.resolver.resolve(&l.target, path, id) {
-                Resolved::File(d) => Some(d),
-                Resolved::Unresolved => None,
+            l.dst = match self.resolver.resolve(&self.syms.get(l.target), path, id) {
+                Resolved::File(d) => d,
+                Resolved::Unresolved => NONE,
             };
         }
     }
@@ -265,24 +340,23 @@ impl State {
         let mut back_add: HashMap<u32, Vec<u32>> = HashMap::new();
         let mut back_rm: HashMap<u32, Vec<u32>> = HashMap::new();
         let mut touched_backlinks: HashSet<u32> = HashSet::new();
-        let mut unresolved_dirty: HashSet<String> = HashSet::new();
+        let mut unresolved_dirty: HashSet<u32> = HashSet::new();
 
-        let drop_outgoing = |st: &mut State, src: u32, links: &[OutLink], back_rm: &mut HashMap<u32, Vec<u32>>, unresolved_dirty: &mut HashSet<String>| {
+        let drop_outgoing = |st: &mut State, src: u32, links: &[OutLink], back_rm: &mut HashMap<u32, Vec<u32>>, unresolved_dirty: &mut HashSet<u32>| {
             for l in links {
-                match l.dst {
+                match l.dst() {
                     Some(d) if d != src => back_rm.entry(d).or_default().push(src),
                     Some(_) => {}
                     None => {
-                        let key = l.target.to_lowercase();
-                        if let Some(v) = st.unresolved.get_mut(&key) {
-                            v.retain(|&s| s != src);
-                            unresolved_dirty.insert(key);
+                        if let Some(v) = st.unresolved.get_mut(&l.lkey) {
+                            remove_sorted(v, src);
+                            unresolved_dirty.insert(l.lkey);
                         }
                     }
                 }
-                if let Some(n) = target_name(&l.target) {
-                    if let Some(set) = st.by_target_name.get_mut(&n) {
-                        set.remove(&src);
+                if l.name != NONE {
+                    if let Some(v) = st.by_target_name.get_mut(&l.name) {
+                        remove_sorted(v, src);
                     }
                 }
             }
@@ -315,10 +389,8 @@ impl State {
             // Sources that pointed at it now need re-resolution (handled via affected names).
             for &s in &old.backlinks {
                 if let Some(Some(se)) = self.entries.get(s as usize) {
-                    for l in &se.links {
-                        if let Some(n) = target_name(&l.target) {
-                            affected_names.insert(n);
-                        }
+                    for l in se.links.iter().filter(|l| l.dst == id && l.name != NONE) {
+                        affected_names.insert(self.syms.get(l.name).to_string());
                     }
                 }
             }
@@ -406,13 +478,8 @@ impl State {
                 .into_par_iter()
                 .map(|(id, u)| {
                     let p = u.parsed.expect("reparsed has parse");
-                    let mut links: Vec<OutLink> = p
-                        .links
-                        .iter()
-                        .map(|l| OutLink { target: l.target.clone(), subpath: l.subpath.clone(), display: l.display.clone(), embed: l.kind == LinkKind::Embed, start: l.start, end: l.end, dst: None })
-                        .collect();
+                    let mut links: Vec<OutLink> = p.links.iter().map(|l| make_link(&this.syms, l)).collect();
                     this.resolve_links(id, &u.rel, &mut links);
-                    let names: Vec<Option<String>> = links.iter().map(|l| target_name(&l.target)).collect();
                     let e = Entry {
                         id,
                         path: u.rel.clone(),
@@ -429,7 +496,7 @@ impl State {
                         word_count: p.word_count,
                         tasks_open: p.tasks.iter().filter(|t| !t.done).count() as u32,
                         tasks_done: p.tasks.iter().filter(|t| t.done).count() as u32,
-                        frontmatter: p.frontmatter,
+                        frontmatter: p.frontmatter.as_ref().map(|f| Arc::from(f.to_string())),
                         backlinks: this.entries[id as usize].as_ref().map(|o| o.backlinks.clone()).unwrap_or_default(),
                     };
                     let doc = IndexDoc {
@@ -446,25 +513,25 @@ impl State {
                         title: e.title.clone(),
                         aliases: e.aliases.clone(),
                         tags: e.tags.clone(),
-                        frontmatter_json: e.frontmatter.as_ref().map(|f| f.to_string()).unwrap_or_default(),
+                        frontmatter_json: e.frontmatter.as_deref().unwrap_or_default().to_string(),
                         headings: e.headings.clone(),
                         word_count: e.word_count,
                     };
                     let links = link_records(&e);
-                    Built { e, names, doc, note, links, chunks: u.chunks, minhash: u.minhash }
+                    Built { e, doc, note, links, chunks: u.chunks, minhash: u.minhash }
                 })
                 .collect()
         };
         out.index_docs.reserve(built.len());
         for b in built {
-            let Built { mut e, names, doc, note, links, chunks, minhash } = b;
+            let Built { mut e, doc, note, links, chunks, minhash } = b;
             let id = e.id;
             let before = e.backlinks.len();
             self.take_pending(id, &mut e.backlinks);
             if e.backlinks.len() != before {
                 out.store.backlinks.push((id, e.backlinks.clone()));
             }
-            self.register_outgoing_named(&e, &names, &mut back_add, &mut unresolved_dirty);
+            self.register_outgoing(&e, &mut back_add, &mut unresolved_dirty);
             out.index_docs.push(doc);
             out.store.notes.push((id, Some(note)));
             out.store.links.push((id, links));
@@ -477,7 +544,7 @@ impl State {
         // 4. re-resolve sources affected by name changes
         let mut sources: HashSet<u32> = HashSet::new();
         for n in &affected_names {
-            if let Some(s) = self.by_target_name.get(n) {
+            if let Some(s) = self.syms.lookup(n).and_then(|sym| self.by_target_name.get(&sym)) {
                 sources.extend(s.iter().copied());
             }
         }
@@ -493,14 +560,13 @@ impl State {
             ne.links = links;
             // Undo old registrations then register new.
             for l in &old_links {
-                match l.dst {
+                match l.dst() {
                     Some(d) if d != src => back_rm.entry(d).or_default().push(src),
                     Some(_) => {}
                     None => {
-                        let key = l.target.to_lowercase();
-                        if let Some(v) = self.unresolved.get_mut(&key) {
-                            v.retain(|&s| s != src);
-                            unresolved_dirty.insert(key);
+                        if let Some(v) = self.unresolved.get_mut(&l.lkey) {
+                            remove_sorted(v, src);
+                            unresolved_dirty.insert(l.lkey);
                         }
                     }
                 }
@@ -528,7 +594,7 @@ impl State {
             if v.is_empty() {
                 self.unresolved.remove(&key);
             }
-            out.store.unresolved.push((key, v));
+            out.store.unresolved.push((self.syms.get(key).to_string(), v));
         }
         if !out.changed_paths.is_empty() {
             self.generation += 1;
@@ -536,34 +602,18 @@ impl State {
         out
     }
 
-    fn register_outgoing(&mut self, e: &Entry, back_add: &mut HashMap<u32, Vec<u32>>, unresolved_dirty: &mut HashSet<String>) {
-        let names: Vec<Option<String>> = e.links.iter().map(|l| target_name(&l.target)).collect();
-        self.register_outgoing_named(e, &names, back_add, unresolved_dirty)
-    }
-
-    fn register_outgoing_named(&mut self, e: &Entry, names: &[Option<String>], back_add: &mut HashMap<u32, Vec<u32>>, unresolved_dirty: &mut HashSet<String>) {
+    fn register_outgoing(&mut self, e: &Entry, back_add: &mut HashMap<u32, Vec<u32>>, unresolved_dirty: &mut HashSet<u32>) {
         for l in &e.links {
-            match l.dst {
+            match l.dst() {
                 Some(d) if d != e.id => back_add.entry(d).or_default().push(e.id),
                 Some(_) => {}
                 None => {
-                    let key = l.target.to_lowercase();
-                    let v = self.unresolved.entry(key.clone()).or_default();
-                    if let Err(pos) = v.binary_search(&e.id) {
-                        v.insert(pos, e.id);
-                    }
-                    unresolved_dirty.insert(key);
+                    insert_sorted(self.unresolved.entry(l.lkey).or_default(), e.id);
+                    unresolved_dirty.insert(l.lkey);
                 }
             }
-        }
-        for n in names.iter().flatten() {
-            match self.by_target_name.get_mut(n) {
-                Some(set) => {
-                    set.insert(e.id);
-                }
-                None => {
-                    self.by_target_name.insert(n.clone(), HashSet::from([e.id]));
-                }
+            if l.name != NONE {
+                insert_sorted(self.by_target_name.entry(l.name).or_default(), e.id);
             }
         }
     }
@@ -576,6 +626,7 @@ impl State {
         let total = self.entries.iter().flatten().count();
         Snapshot {
             generation: self.generation,
+            syms: self.syms.clone(),
             entries: Arc::new(self.entries.clone()),
             by_path: self.by_path.clone(),
             dirs: Arc::new(self.dirs.iter().cloned().collect()),
@@ -600,7 +651,7 @@ impl State {
             }
             active[e.id as usize] = true;
             for l in &e.links {
-                if let Some(d) = l.dst {
+                if let Some(d) = l.dst() {
                     if self.entries.get(d as usize).and_then(|x| x.as_ref()).is_some_and(|x| x.markdown) {
                         edges.push((e.id, d));
                     }
@@ -613,7 +664,6 @@ impl State {
 
 struct Built {
     e: Entry,
-    names: Vec<Option<String>>,
     doc: IndexDoc,
     note: vault_store::NoteRec,
     links: Vec<(vault_store::LinkKey, vault_store::LinkRec)>,
@@ -624,7 +674,7 @@ struct Built {
 fn link_records(e: &Entry) -> Vec<(vault_store::LinkKey, vault_store::LinkRec)> {
     let mut m: HashMap<vault_store::LinkKey, vault_store::LinkRec> = HashMap::new();
     for l in &e.links {
-        if let Some(d) = l.dst {
+        if let Some(d) = l.dst() {
             let r = m.entry((e.id, d, link_kind_code(l))).or_insert(vault_store::LinkRec { count: 0, offsets: Vec::new() });
             r.count += 1;
             r.offsets.push(l.start);

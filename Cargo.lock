@@ -2721,6 +2721,7 @@ dependencies = [
 name = "vault-embed"
 version = "0.1.0"
 dependencies = [
+ "memmap2",
  "rayon",
  "safetensors",
  "serde",
@@ -2777,6 +2778,7 @@ version = "0.1.0"
 dependencies = [
  "frizbee",
  "nucleo-matcher",
+ "parking_lot",
  "rayon",
  "serde",
  "tantivy",

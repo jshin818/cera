@@ -18,33 +18,55 @@ pub enum Cmd {
     Shutdown,
 }
 
-pub fn run(engine: Engine, mapped: Option<vault_store::MappedSnapshot>, kick: Receiver<Cmd>) {
+pub fn run(engine: Engine, mapped: Option<vault_store::MappedSnapshot>, links: Option<vault_store::MappedLinks>, kick: Receiver<Cmd>) {
     let inner = &engine.0;
     let t_ready = Instant::now();
 
-    // Hydrate from the snapshot (no file reads).
+    // Hydrate from the snapshot (no file reads). Phase A: the file table, published at once so
+    // the sidebar and quick switcher work; phase B: links, headings, backlinks.
     let t = Instant::now();
     let mut force_text_rebuild = false;
+    let mut force_reparse = false;
     if let Some(m) = mapped {
         match m.to_owned() {
             Ok(data) => {
-                let st = crate::persist::from_snapshot(data);
+                let st = crate::persist::hydrate_core(data);
                 let notes = st.entries.iter().flatten().filter(|e| e.markdown).count() as u64;
                 if inner.text.num_docs() != notes {
                     tracing::info!(index = inner.text.num_docs(), notes, "text index out of sync with snapshot; rebuilding");
                     force_text_rebuild = true;
                 }
-                *inner.state.lock() = st;
+                let mut g = inner.state.lock();
+                *g = st;
+                publish(inner, &g);
             }
             Err(e) => tracing::warn!(error = %e, "snapshot decode failed; full reindex"),
         }
+        drop(m);
+        inner.timings.lock().hydrate_core_ms = ms(t);
+        rebuild_switcher(inner);
+        let mut ok = false;
+        if let Some(mut l) = links {
+            if let Ok(a) = l.archived() {
+                let mut st = std::mem::take(&mut *inner.state.lock());
+                if a.generation.to_native() == st.generation {
+                    crate::persist::attach_links(&mut st, a);
+                    ok = true;
+                }
+                let mut g = inner.state.lock();
+                *g = st;
+                publish(inner, &g);
+            }
+        }
+        if !ok {
+            tracing::info!("links file missing or stale; reparsing notes");
+            force_reparse = true;
+        }
     }
-    {
-        let st = inner.state.lock();
-        publish(inner, &st);
-    }
-    rebuild_switcher(inner);
     inner.timings.lock().hydrate_ms = ms(t);
+    if inner.shutdown.load(Ordering::SeqCst) {
+        return;
+    }
 
     // Watcher before the walk finishes, so nothing slips between walk and watch.
     let watcher = if inner.opts.watch {
@@ -68,8 +90,10 @@ pub fn run(engine: Engine, mapped: Option<vault_store::MappedSnapshot>, kick: Re
     inner.timings.lock().walk_ms = ms(t);
 
     let t = Instant::now();
-    if force_text_rebuild {
-        let _ = inner.text.clear();
+    if force_text_rebuild || force_reparse {
+        if force_text_rebuild {
+            let _ = inner.text.clear();
+        }
         inner.state.lock().entries.iter_mut().for_each(|e| {
             if let Some(x) = e {
                 // Force a reparse by forgetting the hash.
@@ -93,18 +117,26 @@ pub fn run(engine: Engine, mapped: Option<vault_store::MappedSnapshot>, kick: Re
         tm.files_reparsed = reparsed;
         tm.ready_ms = ms(t_ready);
     }
+    if reparsed > 0 || force_reparse {
+        rebuild_switcher(inner);
+    }
     inner.indexing.store(false, Ordering::SeqCst);
     {
         let (m, cv) = &inner.ready;
         *m.lock() = true;
         cv.notify_all();
     }
-    // Embedding catch-up for notes without vectors.
+    // Embedding catch-up for notes without vectors (after the text index: never competes with it).
     if inner.opts.embed {
         enqueue_missing_embeddings(inner);
     }
     inner.dirty_graph.store(true, Ordering::SeqCst);
     inner.dirty_titles.store(true, Ordering::SeqCst);
+    {
+        let e = engine.clone();
+        let h = std::thread::Builder::new().name("vault-bg".into()).spawn(move || background(e)).expect("spawn bg");
+        inner.threads.lock().push(h);
+    }
 
     let mut last_commit = Instant::now();
     let empty = crossbeam_channel::never();
@@ -172,28 +204,56 @@ pub fn run(engine: Engine, mapped: Option<vault_store::MappedSnapshot>, kick: Re
             tracing::debug!(ms = ms(t), "commit");
             last_commit = Instant::now();
         }
-        idle_work(&engine);
     }
 }
 
-fn idle_work(engine: &Engine) {
+/// Low-priority background loop: switcher/mention rebuilds, graph metrics and persistence. Kept off
+/// the indexer thread so watcher events and commits never wait behind multi-second jobs.
+fn background(engine: Engine) {
     let inner = &engine.0;
-    let quiet = inner.last_change.lock().elapsed();
-    if inner.dirty_titles.load(Ordering::SeqCst) && quiet > Duration::from_millis(150) {
-        inner.dirty_titles.store(false, Ordering::SeqCst);
-        rebuild_switcher(inner);
-        rebuild_mentions(inner);
-    }
-    if quiet < inner.opts.idle {
-        return;
-    }
-    if inner.dirty_graph.load(Ordering::SeqCst) {
-        compute_graph(engine);
-    }
-    if inner.dirty_persist.load(Ordering::SeqCst) && inner.embed_pending.load(Ordering::SeqCst) == 0 {
-        if let Err(e) = persist(engine) {
-            tracing::warn!(error = %e, "persist failed");
+    lower_priority();
+    while !inner.shutdown.load(Ordering::SeqCst) {
+        std::thread::sleep(Duration::from_millis(50));
+        let quiet = inner.last_change.lock().elapsed();
+        if inner.dirty_titles.load(Ordering::SeqCst) && quiet > Duration::from_millis(150) {
+            inner.dirty_titles.store(false, Ordering::SeqCst);
+            rebuild_switcher(inner);
+            inner.mentions.store(None); // rebuilt lazily on next use
         }
+        if quiet < inner.opts.idle {
+            continue;
+        }
+        if inner.dirty_graph.load(Ordering::SeqCst) && inner.embed_pending.load(Ordering::SeqCst) == 0 {
+            compute_graph(&engine);
+        }
+        if inner.dirty_persist.load(Ordering::SeqCst) && inner.embed_pending.load(Ordering::SeqCst) == 0 && inner.last_change.lock().elapsed() >= inner.opts.idle {
+            if let Err(e) = persist(&engine) {
+                tracing::warn!(error = %e, "persist failed");
+            }
+        }
+    }
+}
+
+/// Run the current thread at background priority (macOS: utility QoS, which favours efficiency
+/// cores; Linux: nice 10), so indexing never competes with interactive queries.
+pub(crate) fn lower_priority() {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        unsafe extern "C" {
+            fn pthread_set_qos_class_self_np(qos: u32, rel: i32) -> i32;
+        }
+        pthread_set_qos_class_self_np(0x11, 0);
+    }
+    #[cfg(target_os = "linux")]
+    unsafe {
+        unsafe extern "C" {
+            fn syscall(n: i64, ...) -> i64;
+            fn setpriority(which: i32, who: u32, prio: i32) -> i32;
+        }
+        let tid = syscall(186) as u32; // SYS_gettid on x86_64
+        #[cfg(target_arch = "aarch64")]
+        let tid = syscall(178) as u32;
+        setpriority(0, tid, 10);
     }
 }
 
@@ -231,6 +291,9 @@ fn sync_with_disk(engine: &Engine, files: Vec<vault_fs::WalkedFile>, dirs: Vec<S
     let mut reparsed = 0;
     let mut first = true;
     for batch in changed.chunks(4000) {
+        if inner.shutdown.load(Ordering::SeqCst) {
+            break;
+        }
         let t = Instant::now();
         let updates = read_and_parse(inner, batch, false);
         let t_parse = ms(t);
@@ -330,7 +393,8 @@ fn read_and_parse(inner: &Inner, files: &[vault_fs::WalkedFile], skip_own: bool)
 
 pub(crate) fn parse_update(inner: &Inner, rel: &str, size: u64, mtime_ns: i64, hash: u64, src: &str) -> FileUpdate {
     let parsed = vault_parse::parse(rel, src);
-    let chunks = if inner.opts.embed { vault_parse::chunk_note(src, &parsed) } else { Vec::new() };
+    let chunks = Vec::new(); // the embedding worker re-chunks from disk when it gets to the file
+    let _ = inner;
     let minhash = inner.minhasher.signature(&parsed.body_text);
     FileUpdate { rel: rel.to_string(), size, mtime_ns, hash, parsed: Some(parsed), chunks, minhash }
 }
@@ -377,10 +441,11 @@ pub(crate) fn apply(engine: &Engine, updates: Vec<FileUpdate>, removals: Vec<Str
     tracing::debug!(state_ms = t_state, text_ms = t_text, store_ms = t_store, publish_ms = ms(t_pub), total_ms = ms(t0), "apply");
     let generation = st.generation;
     drop(st);
-    if inner.opts.embed {
-        for (id, chunks) in applied.embed {
+    // During the first index the catch-up pass embeds everything afterwards; later edits embed now.
+    if inner.opts.embed && !inner.indexing.load(Ordering::SeqCst) {
+        for (id, _) in applied.embed {
             inner.embed_pending.fetch_add(1, Ordering::SeqCst);
-            let _ = inner.embed_tx.send((id, chunks));
+            let _ = inner.embed_tx.send(id);
         }
     }
     inner.pending_commit.store(true, Ordering::SeqCst);
@@ -415,10 +480,15 @@ pub(crate) fn rebuild_switcher(inner: &Inner) {
     inner.switcher.store(Some(Arc::new(sw)));
 }
 
-fn rebuild_mentions(inner: &Inner) {
+pub(crate) fn mentions(inner: &Inner) -> Arc<vault_graph::MentionIndex> {
+    if let Some(m) = inner.mentions.load_full() {
+        return m;
+    }
     let snap = inner.snap.load_full();
     let names = snap.notes().flat_map(|e| std::iter::once((e.id, e.title.clone())).chain(e.aliases.iter().map(move |a| (e.id, a.clone()))));
-    inner.mentions.store(Some(Arc::new(vault_graph::MentionIndex::new(names.collect::<Vec<_>>(), 3))));
+    let m = Arc::new(vault_graph::MentionIndex::new(names.collect::<Vec<_>>(), 3));
+    inner.mentions.store(Some(m.clone()));
+    m
 }
 
 /// Global PageRank + Leiden clusters on the current link graph.
@@ -452,14 +522,14 @@ pub(crate) fn compute_graph(engine: &Engine) {
 
 pub(crate) fn persist(engine: &Engine) -> Result<()> {
     let inner = &engine.0;
+    let _guard = inner.persist_lock.lock();
     inner.dirty_persist.store(false, Ordering::SeqCst);
     let t = Instant::now();
     inner.store_drain(Duration::from_secs(60));
-    let data = crate::persist::to_snapshot(&inner.state.lock());
-    vault_store::snapshot::save(&inner.app_dir.join("snapshot.rkyv"), &data)?;
+    let (data, links) = crate::persist::to_snapshot(&inner.state.lock());
+    vault_store::snapshot::save(&inner.app_dir, &data, &links)?;
     if inner.dirty_vectors.swap(false, Ordering::SeqCst) {
-        let v = inner.vectors.read().clone();
-        v.save(&inner.app_dir.join("vectors").join("index.bin"))?;
+        inner.vectors.write().save(&inner.app_dir.join("vectors").join("index.bin"))?;
     }
     if let Some(l) = inner.layout.lock().as_ref() {
         let _ = l.save(&inner.app_dir.join("layout.bin"));
@@ -492,32 +562,21 @@ fn load_vectors(inner: &Inner) {
 
 fn enqueue_missing_embeddings(inner: &Inner) {
     let snap = inner.snap.load_full();
-    let missing: Vec<(u32, String)> = {
+    let missing: Vec<u32> = {
         let v = inner.vectors.read();
-        snap.notes().filter(|e| !v.has_file(e.id)).map(|e| (e.id, e.path.clone())).collect()
+        snap.notes().filter(|e| !v.has_file(e.id)).map(|e| e.id).collect()
     };
-    if missing.is_empty() {
-        return;
-    }
     inner.embed_pending.fetch_add(missing.len() as u64, Ordering::SeqCst);
-    for batch in missing.chunks(2000) {
-        let chunks: Vec<(u32, Vec<vault_parse::Chunk>)> = batch
-            .par_iter()
-            .map(|(id, path)| {
-                let src = vault_fs::read(&inner.root, path).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
-                let p = vault_parse::parse(path, &src);
-                (*id, vault_parse::chunk_note(&src, &p))
-            })
-            .collect();
-        for c in chunks {
-            let _ = inner.embed_tx.send(c);
-        }
+    for id in missing {
+        let _ = inner.embed_tx.send(id);
     }
 }
 
-/// Embedding worker: drains the queue in batches, re-embeds only chunks whose XXH3 changed.
-pub fn embed_worker(engine: Engine, rx: Receiver<(u32, Vec<vault_parse::Chunk>)>) {
+/// Embedding worker: drains file ids in batches, chunks them from disk and re-embeds only chunks
+/// whose XXH3 changed. Runs at background priority.
+pub fn embed_worker(engine: Engine, rx: Receiver<u32>) {
     let inner = &engine.0;
+    lower_priority();
     let mut total_ms = 0.0;
     let mut total_chunks = 0usize;
     loop {
@@ -531,52 +590,58 @@ pub fn embed_worker(engine: Engine, rx: Receiver<(u32, Vec<vault_parse::Chunk>)>
             }
             Err(RecvTimeoutError::Disconnected) => return,
         };
-        let mut batch = vec![first];
-        let mut nchunks = batch[0].1.len();
-        while nchunks < 4096 {
+        if inner.shutdown.load(Ordering::SeqCst) {
+            return;
+        }
+        let mut ids = vec![first];
+        while ids.len() < 512 {
             match rx.try_recv() {
-                Ok(x) => {
-                    nchunks += x.1.len();
-                    batch.push(x);
-                }
+                Ok(x) => ids.push(x),
                 Err(_) => break,
             }
         }
+        let n_ids = ids.len() as u64;
         let t = Instant::now();
         let emb = inner.embedder.read().clone();
         let snap = inner.snap.load_full();
-        // Reuse vectors of unchanged chunks.
-        let old_hashes = inner.chunk_hashes.lock();
-        let mut texts: Vec<&str> = Vec::new();
-        let mut plan: Vec<(u32, Vec<Result2>)> = Vec::new();
-        enum Result2 {
+        ids.sort_unstable();
+        ids.dedup();
+        let batch: Vec<(u32, Vec<vault_parse::Chunk>)> = ids
+            .par_iter()
+            .filter_map(|&id| {
+                let e = snap.get(id).filter(|e| e.markdown)?;
+                let src = vault_fs::read(&inner.root, &e.path).ok()?;
+                let src = String::from_utf8_lossy(&src);
+                let p = vault_parse::parse(&e.path, &src);
+                Some((id, vault_parse::chunk_note(&src, &p)))
+            })
+            .collect();
+        enum Plan {
             New(usize),
             Reuse(Vec<f32>),
         }
+        let mut texts: Vec<&str> = Vec::new();
+        let mut plan: Vec<Vec<Plan>> = Vec::with_capacity(batch.len());
         {
+            let old_hashes = inner.chunk_hashes.lock();
             let v = inner.vectors.read();
             for (id, chunks) in &batch {
-                if snap.get(*id).is_none() {
-                    continue;
-                }
                 let prev = old_hashes.get(id);
                 let prev_vecs = prev.and_then(|_| v.file_vector_rows(*id));
                 let mut p = Vec::with_capacity(chunks.len());
-                for (i, c) in chunks.iter().enumerate() {
+                for c in chunks {
                     let reuse = prev.zip(prev_vecs.as_ref()).and_then(|(h, vecs)| h.iter().position(|x| *x == c.hash).and_then(|j| vecs.get(j).cloned()));
                     match reuse {
-                        Some(vec) => p.push(Result2::Reuse(vec)),
+                        Some(vec) => p.push(Plan::Reuse(vec)),
                         None => {
-                            p.push(Result2::New(texts.len()));
+                            p.push(Plan::New(texts.len()));
                             texts.push(&c.text);
                         }
                     }
-                    let _ = i;
                 }
-                plan.push((*id, p));
+                plan.push(p);
             }
         }
-        drop(old_hashes);
         let fresh = emb.embed(&texts);
         let n_new = texts.len();
         {
@@ -586,19 +651,19 @@ pub fn embed_worker(engine: Engine, rx: Receiver<(u32, Vec<vault_parse::Chunk>)>
             }
             let mut hashes = inner.chunk_hashes.lock();
             let mut store = vault_store::StoreBatch::default();
-            for ((id, p), (_, chunks)) in plan.into_iter().zip(batch.iter().filter(|(id, _)| snap.get(*id).is_some())) {
+            for (p, (id, chunks)) in plan.into_iter().zip(batch.iter()) {
                 let vecs: Vec<Vec<f32>> = p
                     .into_iter()
                     .map(|r| match r {
-                        Result2::New(i) => fresh[i].clone(),
-                        Result2::Reuse(x) => x,
+                        Plan::New(i) => fresh[i].clone(),
+                        Plan::Reuse(x) => x,
                     })
                     .collect();
-                v.upsert_file(id, &vecs);
-                hashes.insert(id, chunks.iter().map(|c| c.hash).collect());
+                v.upsert_file(*id, &vecs);
+                hashes.insert(*id, chunks.iter().map(|c| c.hash).collect());
                 store.chunks.push((
-                    id,
-                    chunks.iter().map(|c| vault_store::ChunkRec { file_id: id, start: c.start, end: c.end, heading_path: c.heading_path.clone(), model: emb.name().to_string(), xxh3: c.hash }).collect(),
+                    *id,
+                    chunks.iter().map(|c| vault_store::ChunkRec { file_id: *id, start: c.start, end: c.end, heading_path: c.heading_path.clone(), model: emb.name().to_string(), xxh3: c.hash }).collect(),
                 ));
             }
             inner.store_write(store);
@@ -614,6 +679,6 @@ pub fn embed_worker(engine: Engine, rx: Receiver<(u32, Vec<vault_parse::Chunk>)>
             tm.embed_ms = total_ms;
             tm.embed_chunks = total_chunks;
         }
-        inner.embed_pending.fetch_sub(batch.len() as u64, Ordering::SeqCst);
+        inner.embed_pending.fetch_sub(n_ids, Ordering::SeqCst);
     }
 }

@@ -10,6 +10,7 @@ tantivy.workspace = true
 nucleo-matcher.workspace = true
 frizbee.workspace = true
 rayon.workspace = true
+parking_lot.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 serde.workspace = true

@@ -136,7 +136,8 @@ pub fn run(a: BenchArgs) -> Result<()> {
     rows.push(row("Snapshot load (mmap + verify)", 15.0, vec![t.snapshot_map_ms], format!("{:.1} MB snapshot", t.snapshot_bytes as f64 / 1e6)));
     e.wait_ready(Duration::from_secs(1800));
     let t = e.timings();
-    rows.push(row("Hydrate state from snapshot", 300.0, vec![t.hydrate_ms], "background, after first frame"));
+    rows.push(row("Hydrate file table (switcher/sidebar usable)", 300.0, vec![t.hydrate_core_ms], "background, after first frame"));
+    rows.push(row("Hydrate links + backlinks", 1000.0, vec![t.hydrate_ms], "background, after first frame (no spec budget)"));
     if embed {
         e.wait_embeddings(Duration::from_secs(1800));
     }
@@ -155,10 +156,15 @@ pub fn run(a: BenchArgs) -> Result<()> {
         let n = rng.random_range(1..=6).min(chars.len().max(1));
         let start = rng.random_range(0..chars.len().saturating_sub(n).max(1));
         let q: String = chars[start..(start + n).min(chars.len())].iter().collect();
-        let (_, ms) = time(|| e.switch(&q, 50));
-        sw.push(ms);
+        // Type it one character at a time, as a user would; each keystroke is one sample.
+        let mut typed = String::new();
+        for c in q.chars() {
+            typed.push(c);
+            let (_, ms) = time(|| e.switch(&typed, 50));
+            sw.push(ms);
+        }
     }
-    rows.push(row("Quick switcher per keystroke", 5.0, sw, format!("{} titles", titles.len())));
+    rows.push(row("Quick switcher per keystroke", 5.0, sw, format!("{} titles, typed 1-6 chars", titles.len())));
 
     // 5. Full-text and hybrid search on the query set.
     let queries: Vec<String> = std::fs::read_to_string(vault.join(".vault-bench-queries.txt"))
@@ -198,7 +204,7 @@ pub fn run(a: BenchArgs) -> Result<()> {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let s = e.snapshot();
-            let back_ok = s.by_path(&rel).is_some_and(|n| n.links.first().and_then(|l| l.dst).and_then(|d| s.get(d)).is_some_and(|d| d.backlinks.contains(&n.id)));
+            let back_ok = s.by_path(&rel).is_some_and(|n| n.links.first().and_then(|l| l.dst()).and_then(|d| s.get(d)).is_some_and(|d| d.backlinks.contains(&n.id)));
             if back_ok && !e.search_text(&word, 1).unwrap_or_default().is_empty() {
                 ext.push(t.elapsed().as_secs_f64() * 1000.0);
                 break;

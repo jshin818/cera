@@ -185,7 +185,7 @@ impl Engine {
             let src_path = if src.path == from { to.clone() } else { src.path.clone() };
             let Ok(bytes) = vault_fs::read(&self.0.root, &src_path) else { continue };
             let mut text = String::from_utf8_lossy(&bytes).into_owned();
-            let mut links: Vec<&crate::OutLink> = src.links.iter().filter(|l| l.dst == Some(e.id)).collect();
+            let mut links: Vec<&crate::OutLink> = src.links.iter().filter(|l| l.dst() == Some(e.id)).collect();
             links.sort_by(|a, b| b.start.cmp(&a.start));
             let mut changed = false;
             for l in links {
@@ -341,7 +341,10 @@ impl Engine {
         }
         crate::indexer::publish(&self.0, &st);
         drop(st);
-        self.0.dirty_titles.store(true, std::sync::atomic::Ordering::SeqCst); // switcher boosts
+        if let Some(sw) = self.0.switcher.load_full() {
+            let snap = self.snapshot();
+            sw.set_frecency(id, snap.frecency_norm(id, now));
+        }
         self.0.dirty_persist.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 

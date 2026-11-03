@@ -6,7 +6,7 @@
 pub mod snapshot;
 mod tables;
 
-pub use snapshot::{MappedSnapshot, SnapEntry, SnapHeading, SnapLink, SnapshotData, SNAPSHOT_VERSION};
+pub use snapshot::{LinksData, MappedLinks, MappedSnapshot, SnapDetail, SnapEntry, SnapHeading, SnapLink, SnapshotData, SNAPSHOT_VERSION};
 pub use tables::{ChunkRec, FileRec, FrecencyRec, GraphRec, LinkKey, LinkRec, NoteRec, Store, StoreBatch};
 
 #[derive(Debug, thiserror::Error)]

@@ -8,6 +8,7 @@
 //! embedding catch-up, graph metrics, persist snapshot on idle.
 
 mod indexer;
+pub mod intern;
 mod ops;
 mod persist;
 mod query;
@@ -96,6 +97,9 @@ pub struct Timings {
     pub snapshot_bytes: usize,
     pub stores_open_ms: f64,
     pub open_total_ms: f64,
+    /// File table usable (sidebar, switcher).
+    pub hydrate_core_ms: f64,
+    /// Links/backlinks attached.
     pub hydrate_ms: f64,
     pub walk_ms: f64,
     pub index_ms: f64,
@@ -139,7 +143,8 @@ pub(crate) struct Inner {
     pub opts: EngineOptions,
     pub snap: ArcSwap<Snapshot>,
     pub state: Mutex<state::State>,
-    pub store: vault_store::Store,
+    /// redb, opened on first use (never on the startup path).
+    store_cell: std::sync::OnceLock<vault_store::Store>,
     pub text: vault_search::TextIndex,
     pub vectors: RwLock<vault_embed::VectorIndex>,
     pub embedder: RwLock<Arc<dyn vault_embed::Embedder>>,
@@ -158,7 +163,7 @@ pub(crate) struct Inner {
     pub dirty_persist: AtomicBool,
     pub dirty_vectors: AtomicBool,
     pub last_change: Mutex<Instant>,
-    pub embed_tx: crossbeam_channel::Sender<(u32, Vec<vault_parse::Chunk>)>,
+    pub embed_tx: crossbeam_channel::Sender<u32>,
     pub embed_pending: AtomicU64,
     pub chunk_hashes: Mutex<HashMap<u32, Vec<u64>>>,
     pub related_cache: Mutex<HashMap<u32, (u64, u64, Vec<Related>)>>,
@@ -172,9 +177,24 @@ pub(crate) struct Inner {
     /// search/backlink visibility path waits for it).
     pub store_tx: Mutex<Option<crossbeam_channel::Sender<vault_store::StoreBatch>>>,
     pub store_pending: AtomicU64,
+    pub persist_lock: Mutex<()>,
 }
 
 impl Inner {
+    pub(crate) fn store(&self) -> &vault_store::Store {
+        self.store_cell.get_or_init(|| {
+            let p = self.app_dir.join("meta.redb");
+            match vault_store::Store::open(&p) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(error = %e, "meta.redb unreadable; rebuilding");
+                    let _ = std::fs::remove_file(&p);
+                    vault_store::Store::open(&p).expect("create meta.redb")
+                }
+            }
+        })
+    }
+
     pub(crate) fn store_write(&self, b: vault_store::StoreBatch) {
         if b.is_empty() {
             return;
@@ -189,7 +209,7 @@ impl Inner {
             }
             // After shutdown: write synchronously.
             None => {
-                let _ = self.store.apply(&b);
+                let _ = self.store().apply(&b);
             }
         }
     }
@@ -222,18 +242,11 @@ impl Engine {
 
         let t = Instant::now();
         let mapped = vault_store::MappedSnapshot::open(&app_dir.join("snapshot.rkyv")).ok();
+        let links = mapped.as_ref().and_then(|_| vault_store::MappedLinks::open(&app_dir.join("links.rkyv")).ok());
         let snapshot_map_ms = ms(t);
         let snapshot_bytes = mapped.as_ref().map(|m| m.len_bytes()).unwrap_or(0);
 
         let t = Instant::now();
-        let store = match vault_store::Store::open(&app_dir.join("meta.redb")) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!(error = %e, "meta.redb unreadable; rebuilding");
-                let _ = std::fs::remove_file(app_dir.join("meta.redb"));
-                vault_store::Store::open(&app_dir.join("meta.redb"))?
-            }
-        };
         let text = match vault_search::TextIndex::open(&app_dir.join("tantivy")) {
             Ok(t) => t,
             Err(e) if vault_search::TextIndex::is_lock_busy(&e) => {
@@ -259,7 +272,7 @@ impl Engine {
             opts,
             snap: ArcSwap::from_pointee(Snapshot::default()),
             state: Mutex::new(state::State::default()),
-            store,
+            store_cell: std::sync::OnceLock::new(),
             text,
             vectors: RwLock::new(vault_embed::VectorIndex::new(embedder.name())),
             embedder: RwLock::new(embedder),
@@ -290,6 +303,7 @@ impl Engine {
             threads: Mutex::new(Vec::new()),
             store_tx: Mutex::new(Some(store_tx)),
             store_pending: AtomicU64::new(0),
+            persist_lock: Mutex::new(()),
         });
         {
             let e = engine_weak(&inner);
@@ -298,7 +312,7 @@ impl Engine {
                 .spawn(move || {
                     while let Ok(b) = store_rx.recv() {
                         let Some(inner) = e.upgrade() else { break };
-                        if let Err(err) = inner.store.apply(&b) {
+                        if let Err(err) = inner.store().apply(&b) {
                             tracing::error!(error = %err, "redb write failed");
                         }
                         inner.store_pending.fetch_sub(1, Ordering::SeqCst);
@@ -310,7 +324,7 @@ impl Engine {
         let engine = Engine(inner);
         {
             let e = engine.clone();
-            let h = std::thread::Builder::new().name("vault-indexer".into()).spawn(move || indexer::run(e, mapped, kick_rx)).expect("spawn indexer");
+            let h = std::thread::Builder::new().name("vault-indexer".into()).spawn(move || indexer::run(e, mapped, links, kick_rx)).expect("spawn indexer");
             engine.0.threads.lock().push(h);
         }
         if engine.0.opts.embed {

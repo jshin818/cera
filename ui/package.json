@@ -1,0 +1,25 @@
+{
+  "name": "vault-ui",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Cēra-style desktop UI for the Vault engine",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "6.19.0",
+    "@codemirror/commands": "6.9.0",
+    "@codemirror/lang-markdown": "6.4.0",
+    "@codemirror/language": "6.11.3",
+    "@codemirror/search": "6.5.11",
+    "@codemirror/state": "6.5.2",
+    "@codemirror/view": "6.38.6",
+    "@fontsource/geist-mono": "5.2.6",
+    "@fontsource/inter": "5.2.6",
+    "@lezer/highlight": "1.2.1",
+    "@lezer/markdown": "1.4.3",
+    "esbuild": "0.25.10"
+  }
+}

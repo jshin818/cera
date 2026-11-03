@@ -42,8 +42,9 @@ fn link_dump(e: &Engine) -> String {
     for n in notes {
         out.push_str(&format!("{}  (title={}, aliases={:?}, tags={:?})\n", n.path, n.title, n.aliases, n.tags));
         for l in &n.links {
-            let dst = l.dst.and_then(|d| s.get(d)).map(|d| d.path.clone()).unwrap_or_else(|| "UNRESOLVED".into());
-            out.push_str(&format!("  {}{}{} -> {}\n", if l.embed { "!" } else { "" }, l.target, match &l.subpath { Some(vault_core::Subpath::Heading(h)) => format!("#{h}"), Some(vault_core::Subpath::Block(b)) => format!("#^{b}"), None => String::new() }, dst));
+            let dst = l.dst().and_then(|d| s.get(d)).map(|d| d.path.clone()).unwrap_or_else(|| "UNRESOLVED".into());
+            let sub = match l.subpath(&s.syms) { Some(vault_core::Subpath::Heading(h)) => format!("#{h}"), Some(vault_core::Subpath::Block(b)) => format!("#^{b}"), None => String::new() };
+            out.push_str(&format!("  {}{}{} -> {}\n", if l.embed() { "!" } else { "" }, s.sym(l.target), sub, dst));
         }
         let mut back: Vec<String> = n.backlinks.iter().filter_map(|b| s.get(*b)).map(|b| b.path.clone()).collect();
         back.sort();
@@ -105,7 +106,7 @@ fn writes_rename_delete_and_conflicts() {
     let s = e.snapshot();
     let home = s.by_path("Home.md").unwrap();
     let missing = s.by_path("Missing Note.md").unwrap();
-    assert!(home.links.iter().any(|l| l.dst == Some(missing.id)), "unresolved link resolves on create");
+    assert!(home.links.iter().any(|l| l.dst() == Some(missing.id)), "unresolved link resolves on create");
     assert!(missing.backlinks.contains(&home.id));
     // rename rewrites links
     let to = e.rename("Gamma.md", "Projects/Gamma Renamed.md").unwrap();
@@ -124,8 +125,8 @@ fn writes_rename_delete_and_conflicts() {
     assert!(d.path().join(".trash/Alpha.md").exists());
     let s = e.snapshot();
     let home = s.by_path("Home.md").unwrap();
-    let alpha_link = home.links.iter().find(|l| l.target == "Alpha").unwrap();
-    assert_eq!(alpha_link.dst.and_then(|x| s.get(x)).map(|x| x.path.as_str()), Some("Archive/Old/Alpha.md"), "falls back to the other Alpha");
+    let alpha_link = home.links.iter().find(|l| &*s.sym(l.target) == "Alpha").unwrap();
+    assert_eq!(alpha_link.dst().and_then(|x| s.get(x)).map(|x| x.path.as_str()), Some("Archive/Old/Alpha.md"), "falls back to the other Alpha");
     e.shutdown();
 }
 

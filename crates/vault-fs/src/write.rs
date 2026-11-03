@@ -10,7 +10,9 @@ pub fn atomic_write(root: &Path, rel: &str, bytes: &[u8]) -> Result<u64> {
     let target = to_abs(root, rel);
     let dir = target.parent().unwrap_or(root);
     std::fs::create_dir_all(dir).map_err(io_err(dir))?;
-    let tmp = dir.join(format!(".{}.vault-tmp-{}", target.file_name().and_then(|s| s.to_str()).unwrap_or("note"), std::process::id()));
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = dir.join(format!(".{}.vault-tmp-{}-{seq}", target.file_name().and_then(|s| s.to_str()).unwrap_or("note"), std::process::id()));
     {
         let mut f = std::fs::File::create(&tmp).map_err(io_err(&tmp))?;
         f.write_all(bytes).map_err(io_err(&tmp))?;

@@ -180,7 +180,7 @@ impl Engine {
     pub fn unresolved(&self) -> Vec<(String, Vec<NoteRef>)> {
         let snap = self.snapshot();
         let st = self.0.state.lock();
-        let mut v: Vec<(String, Vec<NoteRef>)> = st.unresolved.iter().map(|(t, srcs)| (t.clone(), srcs.iter().filter_map(|&s| snap.get(s).map(|e| note_ref(e))).collect())).collect();
+        let mut v: Vec<(String, Vec<NoteRef>)> = st.unresolved.iter().map(|(t, srcs)| (st.syms.get(*t).to_string(), srcs.iter().filter_map(|&s| snap.get(s).map(|e| note_ref(e))).collect())).collect();
         v.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.cmp(&b.0)));
         v
     }
@@ -255,7 +255,7 @@ impl Engine {
             .filter_map(|(id, s)| {
                 let e = snap.get(id)?;
                 let score = s * (1.0 + 0.3 * snap.frecency_norm(id, now) + 0.2 * snap.pagerank_norm(id));
-                let section = sections.get(&id).and_then(|&c| self.0.store.chunks_of(id).ok().and_then(|cs| cs.get(c as usize).map(|x| x.heading_path.clone()))).filter(|s| !s.is_empty());
+                let section = sections.get(&id).and_then(|&c| self.0.store().chunks_of(id).ok().and_then(|cs| cs.get(c as usize).map(|x| x.heading_path.clone()))).filter(|s| !s.is_empty());
                 Some(SearchResult {
                     note: note_ref(e),
                     score,
@@ -273,7 +273,7 @@ impl Engine {
         // Fill snippets for vector-only hits from their best chunk.
         for r in out.iter_mut().filter(|r| r.snippet.is_empty()) {
             if let (Some(&c), Some(src)) = (sections.get(&r.note.id), self.read_src(&r.note.path)) {
-                if let Some(ch) = self.0.store.chunks_of(r.note.id).ok().and_then(|cs| cs.get(c as usize).cloned()) {
+                if let Some(ch) = self.0.store().chunks_of(r.note.id).ok().and_then(|cs| cs.get(c as usize).cloned()) {
                     let s = (ch.start as usize).min(src.len());
                     let e = (ch.end as usize).min(src.len());
                     let s = (s..=e).find(|i| src.is_char_boundary(*i)).unwrap_or(e);
@@ -293,7 +293,7 @@ impl Engine {
         for &src_id in &e.backlinks {
             let Some(src) = snap.get(src_id) else { continue };
             let Some(text) = self.read_src(&src.path) else { continue };
-            for l in src.links.iter().filter(|l| l.dst == Some(e.id)) {
+            for l in src.links.iter().filter(|l| l.dst() == Some(e.id)) {
                 out.push(Context { note: note_ref(src), start: l.start, end: l.end, line: line_around(&text, l.start as usize, l.end as usize) });
             }
         }
@@ -339,11 +339,11 @@ impl Engine {
     pub fn outgoing_mentions(&self, path: &str) -> Result<Vec<Context>> {
         let snap = self.snapshot();
         let e = snap.by_path(path).ok_or_else(|| crate::CoreError::NotFound(path.into()))?;
-        let Some(idx) = self.0.mentions.load_full() else { return Ok(Vec::new()) };
+        let idx = crate::indexer::mentions(&self.0);
         let text = self.read_src(path).unwrap_or_default();
         let mut skip: Vec<(u32, u32)> = e.links.iter().map(|l| (l.start, l.end)).collect();
         skip.push((0, src_frontmatter_end(&text)));
-        let linked: HashSet<u32> = e.links.iter().filter_map(|l| l.dst).collect();
+        let linked: HashSet<u32> = e.links.iter().filter_map(|l| l.dst()).collect();
         let mut seen = HashSet::new();
         Ok(idx
             .find(&text, e.id, &skip)
@@ -411,7 +411,7 @@ impl Engine {
             let mut next = Vec::new();
             for &f in &frontier {
                 let Some(e) = snap.get(f) else { continue };
-                let nbrs = e.links.iter().filter_map(|l| l.dst).chain(e.backlinks.iter().copied());
+                let nbrs = e.links.iter().filter_map(|l| l.dst()).chain(e.backlinks.iter().copied());
                 for n in nbrs {
                     if snap.get(n).is_none_or(|x| !x.markdown) || n == f {
                         continue;
@@ -436,7 +436,7 @@ impl Engine {
     pub fn link_suggestions(&self, path: &str, k: usize) -> Result<Vec<Suggestion>> {
         let snap = self.snapshot();
         let e = snap.by_path(path).ok_or_else(|| crate::CoreError::NotFound(path.into()))?.clone();
-        let linked: HashSet<u32> = e.links.iter().filter_map(|l| l.dst).collect();
+        let linked: HashSet<u32> = e.links.iter().filter_map(|l| l.dst()).collect();
         let (g, local, ids) = self.local_graph(&snap, e.id, 2, 5000);
         let aa: Vec<u32> = vault_graph::adamic_adar(&g, local[&e.id], 50).into_iter().map(|(n, _)| ids[n as usize]).filter(|id| !linked.contains(id)).collect();
         let cos: Vec<u32> = {
@@ -639,8 +639,8 @@ impl Engine {
         let mut tags = HashSet::new();
         for e in snap.notes() {
             words += e.word_count as u64;
-            links += e.links.iter().filter(|l| l.dst.is_some()).count();
-            if e.backlinks.is_empty() && e.links.iter().all(|l| l.dst.is_none()) {
+            links += e.links.iter().filter(|l| l.dst().is_some()).count();
+            if e.backlinks.is_empty() && e.links.iter().all(|l| l.dst().is_none()) {
                 orphans += 1;
             }
             open += e.tasks_open as u64;
@@ -680,7 +680,7 @@ impl Engine {
             y: pos(e.id)[1],
             rank: snap.pagerank_norm(e.id),
             cluster: snap.cluster(e.id).unwrap_or(0),
-            degree: (e.backlinks.len() + e.links.iter().filter(|l| l.dst.is_some()).count()) as u32,
+            degree: (e.backlinks.len() + e.links.iter().filter(|l| l.dst().is_some()).count()) as u32,
         };
         let nclusters = snap.clusters.iter().filter(|&&c| c != u32::MAX).max().map(|m| *m as usize + 1).unwrap_or(0);
         if let Some(c) = center {
@@ -709,7 +709,7 @@ impl Engine {
             let mut edges = Vec::new();
             for e in &notes {
                 for l in &e.links {
-                    if let Some(d) = l.dst {
+                    if let Some(d) = l.dst() {
                         if ids.contains(&d) && d != e.id {
                             edges.push((e.id.min(d), e.id.max(d)));
                         }
@@ -740,7 +740,7 @@ impl Engine {
         for e in &notes {
             let ca = snap.cluster(e.id).unwrap_or(0);
             for l in &e.links {
-                if let Some(cb) = l.dst.and_then(|d| snap.cluster(d)) {
+                if let Some(cb) = l.dst().and_then(|d| snap.cluster(d)) {
                     if ca != cb {
                         *cedges.entry((ca.min(cb), ca.max(cb))).or_default() += 1;
                     }

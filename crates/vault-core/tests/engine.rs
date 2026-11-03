@@ -60,7 +60,7 @@ fn golden_links_and_backlinks() {
     let s = e.snapshot();
     assert!(s.by_path("Ignored/Secret.md").is_none(), "userIgnoreFilters respected");
     assert!(s.by_path("assets/diagram.png").is_some_and(|x| !x.markdown));
-    assert!(s.unresolved.contains_key("missing note"));
+    assert!(e.unresolved().iter().any(|(t, _)| t == "missing note"));
     e.shutdown();
 }
 

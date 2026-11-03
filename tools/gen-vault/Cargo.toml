@@ -1,6 +1,13 @@
 [package]
 name = "gen-vault"
-version = "0.1.0"
-edition = "2024"
+description = "Synthetic Obsidian-style vault generator (1k / 10k / 100k notes) for benchmarks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
 
 [dependencies]
+clap.workspace = true
+rand.workspace = true
+rayon.workspace = true
+anyhow.workspace = true

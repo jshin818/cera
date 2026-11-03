@@ -86,6 +86,21 @@ impl LinkResolver {
             return Resolved::File(self_id);
         }
         let lower = t.to_lowercase();
+        // Fast path: a bare name (the common [[Note]] case) is a name or alias lookup.
+        if !lower.contains('/') && !lower.starts_with('.') {
+            if let Some(c) = self.by_name.get(&lower).or_else(|| self.by_name.get(strip_md(&lower))) {
+                if let Some(&(id, _)) = c.first() {
+                    return Resolved::File(id);
+                }
+            }
+            if let Some(&id) = self.by_path.get(&lower) {
+                return Resolved::File(id);
+            }
+            return match self.by_alias.get(&lower).and_then(|c| c.first()) {
+                Some(&(id, _)) => Resolved::File(id),
+                None => Resolved::Unresolved,
+            };
+        }
         // Relative markdown links: resolve against the source folder first.
         if let Some((dir, _)) = from_path.rsplit_once('/') {
             let rel = normalize_dots(&format!("{}/{}", dir.to_lowercase(), lower));

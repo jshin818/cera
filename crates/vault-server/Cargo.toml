@@ -1,6 +1,20 @@
 [package]
 name = "vault-server"
-version = "0.1.0"
-edition = "2024"
+description = "Local HTTP shell: serves the Vault UI and a JSON API over vault-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [dependencies]
+vault-core.workspace = true
+anyhow.workspace = true
+axum = { workspace = true, features = ["macros", "multipart"] }
+tokio = { workspace = true, features = ["fs"] }
+tower-http.workspace = true
+rust-embed.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+rand.workspace = true
+futures-util = "0.3"
+tokio-stream = { version = "0.1", features = ["sync"] }

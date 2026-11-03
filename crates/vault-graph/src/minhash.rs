@@ -8,6 +8,7 @@ const BANDS: usize = 32;
 const ROWS: usize = PERMS / BANDS;
 
 pub struct MinHasher {
+    #[allow(dead_code)]
     a: [u64; PERMS],
     b: [u64; PERMS],
 }
@@ -37,18 +38,47 @@ fn splitmix(mut x: u64) -> u64 {
 impl MinHasher {
     /// Signature of a text, or None if it has fewer than 5 words.
     pub fn signature(&self, text: &str) -> Option<[u32; PERMS]> {
-        let words: Vec<String> = text.split_whitespace().map(|w| w.to_lowercase().trim_matches(|c: char| !c.is_alphanumeric()).to_string()).filter(|w| !w.is_empty()).collect();
+        // Hash each normalized word once, then mix 5 word hashes per shingle (no allocation per shingle).
+        let mut buf = String::new();
+        let words: Vec<u64> = text
+            .split_whitespace()
+            .filter_map(|w| {
+                let w = w.trim_matches(|c: char| !c.is_alphanumeric());
+                if w.is_empty() {
+                    return None;
+                }
+                buf.clear();
+                buf.extend(w.chars().flat_map(char::to_lowercase));
+                Some(xxhash_rust::xxh3::xxh3_64(buf.as_bytes()))
+            })
+            .collect();
         if words.len() < 5 {
             return None;
         }
+        // One-permutation hashing: each shingle hashed once into one of PERMS bins (keep the min
+        // per bin), then empty bins are densified from the next non-empty bin. O(shingles).
         let mut sig = [u32::MAX; PERMS];
         for sh in words.windows(5) {
-            let h = xxhash_rust::xxh3::xxh3_64(sh.join(" ").as_bytes());
-            for i in 0..PERMS {
-                let v = (self.a[i].wrapping_mul(h).wrapping_add(self.b[i]) >> 32) as u32;
-                if v < sig[i] {
-                    sig[i] = v;
+            let h = splitmix(sh[0] ^ splitmix(sh[1] ^ splitmix(sh[2] ^ splitmix(sh[3] ^ splitmix(sh[4] ^ self.b[0])))));
+            let bin = (h % PERMS as u64) as usize;
+            let v = (h >> 32) as u32;
+            if v < sig[bin] {
+                sig[bin] = v;
+            }
+        }
+        if sig.iter().all(|&v| v == u32::MAX) {
+            return None;
+        }
+        for i in 0..PERMS {
+            if sig[i] == u32::MAX {
+                let mut j = (i + 1) % PERMS;
+                let mut hops = 1u32;
+                while sig[j] == u32::MAX {
+                    j = (j + 1) % PERMS;
+                    hops += 1;
                 }
+                // Rotation keeps densified values distinguishable per bin.
+                sig[i] = sig[j].wrapping_add(hops.wrapping_mul(0x9E37_79B9)) | 1;
             }
         }
         Some(sig)

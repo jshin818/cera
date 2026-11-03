@@ -1,6 +1,21 @@
 [package]
 name = "vault-cli"
-version = "0.1.0"
-edition = "2024"
+description = "Headless Vault CLI: index, search, switch, backlinks, related, bench, serve"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "vault"
+path = "src/main.rs"
 
 [dependencies]
+vault-core.workspace = true
+vault-server.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+tracing-subscriber.workspace = true
+rand.workspace = true
+tokio.workspace = true

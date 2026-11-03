@@ -167,6 +167,24 @@ impl Engine {
         vault_fs::read(&self.0.root, path).ok().map(|b| String::from_utf8_lossy(&b).into_owned())
     }
 
+    /// Resolve a link target written in `from` to a vault path (Obsidian rules).
+    pub fn resolve(&self, target: &str, from: &str) -> Option<String> {
+        let st = self.0.state.lock();
+        match st.resolver.resolve(target, from, u32::MAX) {
+            vault_parse::Resolved::File(id) => st.entries.get(id as usize).and_then(|e| e.as_ref()).map(|e| e.path.clone()),
+            vault_parse::Resolved::Unresolved => None,
+        }
+    }
+
+    /// Link targets that resolve to no file, with the notes that use them (most used first).
+    pub fn unresolved(&self) -> Vec<(String, Vec<NoteRef>)> {
+        let snap = self.snapshot();
+        let st = self.0.state.lock();
+        let mut v: Vec<(String, Vec<NoteRef>)> = st.unresolved.iter().map(|(t, srcs)| (t.clone(), srcs.iter().filter_map(|&s| snap.get(s).map(|e| note_ref(e))).collect())).collect();
+        v.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.cmp(&b.0)));
+        v
+    }
+
     /// Quick switcher (Section 6.2).
     pub fn switch(&self, q: &str, limit: usize) -> Vec<SwitchResult> {
         let Some(sw) = self.0.switcher.load_full() else { return Vec::new() };
@@ -355,7 +373,7 @@ impl Engine {
                 }
             },
             || {
-                let g = self.local_graph(&snap, e.id, 3, 4000);
+                let g = self.local_graph(&snap, e.id, 2, 2000);
                 let p = vault_graph::personalized_pagerank(&g.0, &[g.1[&e.id]], 0.15, 1e-4);
                 let mut v: Vec<(u32, f32)> = p.into_iter().filter(|(n, _)| *n != g.1[&e.id]).map(|(n, s)| (g.2[n as usize], s)).collect();
                 v.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
@@ -639,7 +657,7 @@ impl Engine {
             folders: snap.dirs.len(),
             words,
             links,
-            unresolved: snap.unresolved.len(),
+            unresolved: snap.unresolved_targets,
             tags: tags.len(),
             orphans,
             tasks_open: open,

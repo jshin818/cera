@@ -168,6 +168,39 @@ pub(crate) struct Inner {
     pub shutdown: AtomicBool,
     pub indexing: AtomicBool,
     pub threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
+    /// redb writes are applied on their own thread (redb is a rebuildable cache; nothing on the
+    /// search/backlink visibility path waits for it).
+    pub store_tx: Mutex<Option<crossbeam_channel::Sender<vault_store::StoreBatch>>>,
+    pub store_pending: AtomicU64,
+}
+
+impl Inner {
+    pub(crate) fn store_write(&self, b: vault_store::StoreBatch) {
+        if b.is_empty() {
+            return;
+        }
+        let tx = self.store_tx.lock();
+        match tx.as_ref() {
+            Some(tx) => {
+                self.store_pending.fetch_add(1, Ordering::SeqCst);
+                if tx.send(b).is_err() {
+                    self.store_pending.fetch_sub(1, Ordering::SeqCst);
+                }
+            }
+            // After shutdown: write synchronously.
+            None => {
+                let _ = self.store.apply(&b);
+            }
+        }
+    }
+
+    /// Wait until queued redb batches are written.
+    pub(crate) fn store_drain(&self, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        while self.store_pending.load(Ordering::SeqCst) > 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
 }
 
 /// The engine handle. Cheap to clone; all clones share one engine.
@@ -217,6 +250,7 @@ impl Engine {
         let (kick_tx, kick_rx) = crossbeam_channel::unbounded();
         let (embed_tx, embed_rx) = crossbeam_channel::unbounded();
         let (events, _) = tokio::sync::broadcast::channel(256);
+        let (store_tx, store_rx) = crossbeam_channel::unbounded::<vault_store::StoreBatch>();
         let embedder: Arc<dyn vault_embed::Embedder> = Arc::new(vault_embed::HashEmbedder);
         let inner = Arc::new(Inner {
             root,
@@ -254,7 +288,25 @@ impl Engine {
             shutdown: AtomicBool::new(false),
             indexing: AtomicBool::new(true),
             threads: Mutex::new(Vec::new()),
+            store_tx: Mutex::new(Some(store_tx)),
+            store_pending: AtomicU64::new(0),
         });
+        {
+            let e = engine_weak(&inner);
+            let h = std::thread::Builder::new()
+                .name("vault-store".into())
+                .spawn(move || {
+                    while let Ok(b) = store_rx.recv() {
+                        let Some(inner) = e.upgrade() else { break };
+                        if let Err(err) = inner.store.apply(&b) {
+                            tracing::error!(error = %err, "redb write failed");
+                        }
+                        inner.store_pending.fetch_sub(1, Ordering::SeqCst);
+                    }
+                })
+                .expect("spawn store writer");
+            inner.threads.lock().push(h);
+        }
         let engine = Engine(inner);
         {
             let e = engine.clone();
@@ -308,6 +360,7 @@ impl Engine {
         if self.0.kick.send(indexer::Cmd::Flush(tx)).is_ok() {
             let _ = rx.recv_timeout(Duration::from_secs(30));
         }
+        self.0.store_drain(Duration::from_secs(60));
     }
 
     /// Lightweight size+mtime verify of the whole vault (on window focus, or after FSEvents
@@ -366,7 +419,8 @@ impl Engine {
         let _ = self.0.kick.send(indexer::Cmd::Shutdown);
         let me = std::thread::current().id();
         let handles: Vec<_> = self.0.threads.lock().drain(..).collect();
-        for h in handles {
+        let (store_h, others): (Vec<_>, Vec<_>) = handles.into_iter().partition(|h| h.thread().name() == Some("vault-store"));
+        for h in others {
             if h.thread().id() != me {
                 let _ = h.join();
             }
@@ -374,8 +428,17 @@ impl Engine {
         if self.is_ready() {
             let _ = self.persist();
         }
+        // Close the store queue; the writer drains it and exits.
+        self.0.store_tx.lock().take();
+        for h in store_h {
+            let _ = h.join();
+        }
         let _ = self.0.text.close();
     }
+}
+
+fn engine_weak(inner: &Arc<Inner>) -> std::sync::Weak<Inner> {
+    Arc::downgrade(inner)
 }
 
 pub(crate) fn ms(t: Instant) -> f64 {

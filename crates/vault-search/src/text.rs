@@ -55,8 +55,8 @@ pub struct TextIndex {
 }
 
 mod parking {
-    use std::sync::Mutex;
-    pub struct Writer(pub Mutex<Option<tantivy::IndexWriter>>);
+    use std::sync::RwLock;
+    pub struct Writer(pub RwLock<Option<tantivy::IndexWriter>>);
 }
 
 fn schema() -> (Schema, Fields) {
@@ -123,8 +123,8 @@ impl TextIndex {
     fn finish(index: Index, f: Fields) -> Result<TextIndex> {
         index.tokenizers().register(TOKENIZER, analyzer());
         let reader = index.reader_builder().reload_policy(ReloadPolicy::Manual).try_into()?;
-        let writer: IndexWriter = index.writer_with_num_threads(std::thread::available_parallelism().map(|n| n.get().min(8)).unwrap_or(2), 256 << 20)?;
-        Ok(TextIndex { reader, writer: parking::Writer(std::sync::Mutex::new(Some(writer))), f })
+        let writer: IndexWriter = index.writer_with_num_threads(std::thread::available_parallelism().map(|n| n.get().clamp(1, 4)).unwrap_or(2), 96 << 20)?;
+        Ok(TextIndex { reader, writer: parking::Writer(std::sync::RwLock::new(Some(writer))), f })
     }
 
     pub fn num_docs(&self) -> u64 {
@@ -132,10 +132,22 @@ impl TextIndex {
     }
 
     /// Stage an upsert. Visible after `commit`.
+    /// Upsert many documents in parallel (IndexWriter::add_document is thread-safe).
+    pub fn upsert_many(&self, docs: &[IndexDoc], replace: bool) -> Result<()> {
+        use rayon::prelude::*;
+        docs.par_iter().try_for_each(|d| self.upsert_inner(d, replace))
+    }
+
     pub fn upsert(&self, d: &IndexDoc) -> Result<()> {
-        let g = self.writer.0.lock().unwrap();
+        self.upsert_inner(d, true)
+    }
+
+    fn upsert_inner(&self, d: &IndexDoc, replace: bool) -> Result<()> {
+        let g = self.writer.0.read().unwrap();
         let Some(w) = g.as_ref() else { return Ok(()) };
-        w.delete_term(Term::from_field_u64(self.f.file_id, d.file_id as u64));
+        if replace {
+            w.delete_term(Term::from_field_u64(self.f.file_id, d.file_id as u64));
+        }
         let mut doc = doc!(
             self.f.title => d.title.clone(),
             self.f.body => d.body.clone(),
@@ -188,20 +200,20 @@ impl TextIndex {
     }
 
     pub fn delete(&self, file_id: u32) {
-        let g = self.writer.0.lock().unwrap();
+        let g = self.writer.0.read().unwrap();
         let Some(w) = g.as_ref() else { return };
         w.delete_term(Term::from_field_u64(self.f.file_id, file_id as u64));
     }
 
     pub fn clear(&self) -> Result<()> {
-        if let Some(w) = self.writer.0.lock().unwrap().as_mut() {
+        if let Some(w) = self.writer.0.write().unwrap().as_mut() {
             w.delete_all_documents()?;
         }
         Ok(())
     }
 
     pub fn commit(&self) -> Result<()> {
-        if let Some(w) = self.writer.0.lock().unwrap().as_mut() {
+        if let Some(w) = self.writer.0.write().unwrap().as_mut() {
             w.commit()?;
         }
         self.reader.reload()?;
@@ -210,7 +222,7 @@ impl TextIndex {
 
     /// Commit and release the writer (and its lock file). Further writes are ignored.
     pub fn close(&self) -> Result<()> {
-        if let Some(mut w) = self.writer.0.lock().unwrap().take() {
+        if let Some(mut w) = self.writer.0.write().unwrap().take() {
             w.commit()?;
             w.wait_merging_threads()?;
         }

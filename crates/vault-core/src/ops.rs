@@ -337,7 +337,7 @@ impl Engine {
         if let Some(f) = st.frecency.get_mut(id as usize) {
             f.bump(now, weight);
             let rec = vault_store::FrecencyRec { score: f.score, last_access_ms: f.last_access_ms };
-            let _ = self.0.store.apply(&vault_store::StoreBatch { events: vec![(id, rec)], ..Default::default() });
+            self.0.store_write(vault_store::StoreBatch { events: vec![(id, rec)], ..Default::default() });
         }
         crate::indexer::publish(&self.0, &st);
         drop(st);

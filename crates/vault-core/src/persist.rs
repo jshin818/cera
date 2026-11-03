@@ -110,7 +110,7 @@ pub fn from_snapshot(d: SnapshotData) -> State {
     let n = entries.len();
     let mut back: Vec<Vec<u32>> = vec![Vec::new(); n];
     for e in entries.iter().flatten() {
-        st.by_path.insert(e.path.clone(), e.id);
+        Arc::make_mut(&mut st.by_path).insert(e.path.clone(), e.id);
         st.resolver.add_file(e.id, &e.path);
         for a in &e.aliases {
             st.resolver.add_alias(e.id, e.path.len() as u32, a);

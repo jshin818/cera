@@ -81,7 +81,10 @@ pub fn run(engine: Engine, mapped: Option<vault_store::MappedSnapshot>, kick: Re
         });
     }
     let reparsed = sync_with_disk(&engine, files, dirs);
-    if let Err(e) = inner.text.commit() {
+    let tc = Instant::now();
+    let commit_res = inner.text.commit();
+    tracing::info!(commit_ms = ms(tc), "initial commit");
+    if let Err(e) = commit_res {
         tracing::error!(error = %e, "tantivy commit failed");
     }
     {
@@ -131,7 +134,7 @@ pub fn run(engine: Engine, mapped: Option<vault_store::MappedSnapshot>, kick: Re
                 }
                 Ok(Cmd::Shutdown) | Err(_) => break,
             },
-            default(Duration::from_millis(100)) => {}
+            default(if inner.pending_commit.load(Ordering::SeqCst) { Duration::from_millis(10) } else { Duration::from_millis(100) }) => {}
         }
         // Drain whatever else arrived to batch it.
         if let Some(w) = &watcher {
@@ -152,13 +155,21 @@ pub fn run(engine: Engine, mapped: Option<vault_store::MappedSnapshot>, kick: Re
             let mut paths: Vec<String> = changed.into_iter().chain(removed).collect();
             paths.sort();
             paths.dedup();
+            let t = Instant::now();
+            let n = paths.len();
             process_paths(&engine, paths, true);
+            tracing::debug!(paths = n, ms = ms(t), "watch batch");
         }
-        if inner.pending_commit.load(Ordering::SeqCst) && last_commit.elapsed() >= inner.opts.commit_interval {
+        // Commit policy: an isolated change commits after a 30 ms quiet window; a burst of changes
+        // commits at most every `commit_interval` (~250 ms) so typing never floods tantivy.
+        let quiet = inner.last_change.lock().elapsed();
+        if inner.pending_commit.load(Ordering::SeqCst) && (last_commit.elapsed() >= inner.opts.commit_interval || (quiet >= Duration::from_millis(30) && last_commit.elapsed() >= Duration::from_millis(60))) {
             inner.pending_commit.store(false, Ordering::SeqCst);
+            let t = Instant::now();
             if let Err(e) = inner.text.commit() {
                 tracing::error!(error = %e, "tantivy commit failed");
             }
+            tracing::debug!(ms = ms(t), "commit");
             last_commit = Instant::now();
         }
         idle_work(&engine);
@@ -212,13 +223,21 @@ fn sync_with_disk(engine: &Engine, files: Vec<vault_fs::WalkedFile>, dirs: Vec<S
         }
     }
     let n = changed.len();
+    {
+        let new_paths: Vec<&str> = changed.iter().map(|f| f.rel.as_str()).collect();
+        inner.state.lock().preregister(&new_paths);
+    }
     // Bounded batches keep peak memory flat on the first index of a large vault.
     let mut reparsed = 0;
     let mut first = true;
     for batch in changed.chunks(4000) {
+        let t = Instant::now();
         let updates = read_and_parse(inner, batch, false);
+        let t_parse = ms(t);
         reparsed += updates.iter().filter(|u| u.parsed.is_some()).count();
+        let t = Instant::now();
         apply(engine, updates, if first { removed.clone() } else { Vec::new() }, false);
+        tracing::info!(files = batch.len(), parse_ms = t_parse, apply_ms = ms(t), "index batch");
         first = false;
     }
     if first && !removed.is_empty() {
@@ -319,22 +338,24 @@ pub(crate) fn parse_update(inner: &Inner, rel: &str, size: u64, mtime_ns: i64, h
 /// Apply updates under the state lock, stage index/store writes, publish a new snapshot.
 pub(crate) fn apply(engine: &Engine, updates: Vec<FileUpdate>, removals: Vec<String>, external: bool) -> u64 {
     let inner = &engine.0;
+    let t0 = Instant::now();
     let mut st = inner.state.lock();
     let applied = st.apply(updates, removals);
+    let t_state = ms(t0);
     if applied.changed_paths.is_empty() {
         return st.generation;
     }
     for id in &applied.removed_ids {
         inner.text.delete(*id);
     }
-    for d in &applied.index_docs {
-        if let Err(e) = inner.text.upsert(d) {
-            tracing::error!(error = %e, path = %d.path, "index upsert failed");
-        }
+    let t_text = Instant::now();
+    if let Err(e) = inner.text.upsert_many(&applied.index_docs, true) {
+        tracing::error!(error = %e, "index upsert failed");
     }
-    if let Err(e) = inner.store.apply(&applied.store) {
-        tracing::error!(error = %e, "redb write failed");
-    }
+    let t_text = ms(t_text);
+    let t_store = Instant::now();
+    inner.store_write(applied.store);
+    let t_store = ms(t_store);
     {
         let mut nd = inner.neardup.lock();
         for (id, sig) in &applied.minhash {
@@ -351,7 +372,9 @@ pub(crate) fn apply(engine: &Engine, updates: Vec<FileUpdate>, removals: Vec<Str
         }
         inner.vector_gen.fetch_add(1, Ordering::SeqCst);
     }
+    let t_pub = Instant::now();
     publish(inner, &st);
+    tracing::debug!(state_ms = t_state, text_ms = t_text, store_ms = t_store, publish_ms = ms(t_pub), total_ms = ms(t0), "apply");
     let generation = st.generation;
     drop(st);
     if inner.opts.embed {
@@ -417,9 +440,7 @@ pub(crate) fn compute_graph(engine: &Engine) {
         st.generation += 1;
         publish(inner, &st);
         drop(st);
-        if let Err(e) = inner.store.apply(&batch) {
-            tracing::warn!(error = %e, "graph metrics write failed");
-        }
+        inner.store_write(batch);
         inner.dirty_persist.store(true, Ordering::SeqCst);
         rebuild_switcher(inner);
     } else {
@@ -433,6 +454,7 @@ pub(crate) fn persist(engine: &Engine) -> Result<()> {
     let inner = &engine.0;
     inner.dirty_persist.store(false, Ordering::SeqCst);
     let t = Instant::now();
+    inner.store_drain(Duration::from_secs(60));
     let data = crate::persist::to_snapshot(&inner.state.lock());
     vault_store::snapshot::save(&inner.app_dir.join("snapshot.rkyv"), &data)?;
     if inner.dirty_vectors.swap(false, Ordering::SeqCst) {
@@ -579,9 +601,7 @@ pub fn embed_worker(engine: Engine, rx: Receiver<(u32, Vec<vault_parse::Chunk>)>
                     chunks.iter().map(|c| vault_store::ChunkRec { file_id: id, start: c.start, end: c.end, heading_path: c.heading_path.clone(), model: emb.name().to_string(), xxh3: c.hash }).collect(),
                 ));
             }
-            if let Err(e) = inner.store.apply(&store) {
-                tracing::warn!(error = %e, "chunk table write failed");
-            }
+            inner.store_write(store);
         }
         inner.vector_gen.fetch_add(1, Ordering::SeqCst);
         inner.dirty_vectors.store(true, Ordering::SeqCst);

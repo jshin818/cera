@@ -56,7 +56,7 @@ pub struct Snapshot {
     pub entries: Arc<Vec<Option<Arc<Entry>>>>,
     pub by_path: Arc<HashMap<String, u32>>,
     pub dirs: Arc<Vec<String>>,
-    pub unresolved: Arc<HashMap<String, Vec<u32>>>,
+    pub unresolved_targets: usize,
     pub pagerank: Arc<Vec<f32>>,
     pub pagerank_max: f32,
     pub clusters: Arc<Vec<u32>>,
@@ -132,7 +132,8 @@ pub struct Applied {
 #[derive(Default)]
 pub struct State {
     pub entries: Vec<Option<Arc<Entry>>>,
-    pub by_path: HashMap<String, u32>,
+    /// Shared with snapshots; copied on write only when paths change.
+    pub by_path: Arc<HashMap<String, u32>>,
     pub resolver: LinkResolver,
     /// lowercase link-target name (last path segment, without .md) -> sources using that name
     pub by_target_name: HashMap<String, HashSet<u32>>,
@@ -142,6 +143,11 @@ pub struct State {
     pub pagerank: Vec<f32>,
     pub clusters: Vec<u32>,
     pub generation: u64,
+    /// Ids allocated (and registered with the resolver) before their content was indexed, so the
+    /// first index resolves every link once instead of re-resolving as batches arrive.
+    pub preregistered: HashSet<u32>,
+    /// Backlinks for ids that have no entry yet.
+    pub pending_back: HashMap<u32, Vec<u32>>,
 }
 
 pub fn target_name(target: &str) -> Option<String> {
@@ -181,7 +187,7 @@ impl State {
         let id = self.entries.len() as u32;
         self.entries.push(None);
         self.frecency.push(Frecency::default());
-        self.by_path.insert(path.to_string(), id);
+        Arc::make_mut(&mut self.by_path).insert(path.to_string(), id);
         (id, true)
     }
 
@@ -197,6 +203,27 @@ impl State {
         }
     }
 
+    /// Register paths before indexing them (see `preregistered`).
+    pub fn preregister(&mut self, paths: &[&str]) {
+        for p in paths {
+            if self.by_path.contains_key(*p) {
+                continue;
+            }
+            let (id, _) = self.alloc_id(p);
+            self.resolver.add_file(id, p);
+            self.add_dirs_of(p);
+            self.preregistered.insert(id);
+        }
+    }
+
+    fn take_pending(&mut self, id: u32, into: &mut Vec<u32>) {
+        if let Some(p) = self.pending_back.remove(&id) {
+            into.extend(p);
+            into.sort_unstable();
+            into.dedup();
+        }
+    }
+
     fn resolve_links(&self, id: u32, path: &str, links: &mut [OutLink]) {
         for l in links.iter_mut() {
             l.dst = match self.resolver.resolve(&l.target, path, id) {
@@ -207,7 +234,14 @@ impl State {
     }
 
     fn set_backlinks(&mut self, dst: u32, add: &[u32], remove: &[u32], touched: &mut HashSet<u32>) {
-        let Some(Some(e)) = self.entries.get(dst as usize) else { return };
+        let Some(Some(e)) = self.entries.get(dst as usize) else {
+            if (dst as usize) < self.entries.len() {
+                let p = self.pending_back.entry(dst).or_default();
+                p.retain(|s| !remove.contains(s));
+                p.extend_from_slice(add);
+            }
+            return;
+        };
         let mut b = e.backlinks.clone();
         b.retain(|s| !remove.contains(s));
         for &s in add {
@@ -256,8 +290,14 @@ impl State {
 
         // 1. removals
         for path in removals {
-            let Some(id) = self.by_path.remove(&path) else { continue };
-            let Some(old) = self.entries[id as usize].take() else { continue };
+            let Some(id) = Arc::make_mut(&mut self.by_path).remove(&path) else { continue };
+            let Some(old) = self.entries[id as usize].take() else {
+                if self.preregistered.remove(&id) {
+                    self.resolver.remove_file(id, &path);
+                    self.pending_back.remove(&id);
+                }
+                continue;
+            };
             self.resolver.remove_file(id, &old.path);
             affected_names.extend(name_keys(&old.path, &old.aliases));
             drop_outgoing(self, id, &old.links, &mut back_rm, &mut unresolved_dirty);
@@ -292,7 +332,16 @@ impl State {
             let old = self.entries[id as usize].clone();
             let new_aliases: Vec<String> = u.parsed.as_ref().map(|p| p.aliases.clone()).unwrap_or_else(|| old.as_ref().map(|o| o.aliases.clone()).unwrap_or_default());
             let aliases_changed = old.as_ref().is_none_or(|o| o.aliases != new_aliases);
-            if is_new || aliases_changed {
+            if self.preregistered.remove(&id) {
+                // Name already known to the resolver; only aliases are new information.
+                for a in &new_aliases {
+                    self.resolver.add_alias(id, u.rel.len() as u32, a);
+                    affected_names.insert(a.to_lowercase());
+                }
+                if vault_fs::FileKind::of(&u.rel) == vault_fs::FileKind::Markdown {
+                    out.titles_changed = true;
+                }
+            } else if is_new || aliases_changed {
                 if !is_new {
                     self.resolver.remove_file(id, &u.rel);
                 }
@@ -312,7 +361,7 @@ impl State {
             out.store.files.push((id, Some(vault_store::FileRec { path: u.rel.clone(), size: u.size, mtime_ns: u.mtime_ns, xxh3: u.hash, markdown: vault_fs::FileKind::of(&u.rel) == vault_fs::FileKind::Markdown })));
             if u.parsed.is_none() {
                 // stat-only (or attachment)
-                let e = match old {
+                let mut e = match old {
                     Some(o) => Entry { size: u.size, mtime_ns: u.mtime_ns, hash: u.hash, ..(*o).clone() },
                     None => Entry {
                         id,
@@ -334,6 +383,11 @@ impl State {
                         backlinks: Vec::new(),
                     },
                 };
+                let before = e.backlinks.len();
+                self.take_pending(id, &mut e.backlinks);
+                if e.backlinks.len() != before {
+                    out.store.backlinks.push((id, e.backlinks.clone()));
+                }
                 self.entries[id as usize] = Some(Arc::new(e));
                 continue;
             }
@@ -343,60 +397,79 @@ impl State {
             reparsed.push((id, u));
         }
 
-        // 3. build entries for reparsed notes
-        for (id, u) in reparsed {
-            let p = u.parsed.expect("reparsed has parse");
-            let old_back = self.entries[id as usize].as_ref().map(|o| o.backlinks.clone()).unwrap_or_default();
-            let mut links: Vec<OutLink> = p
-                .links
-                .iter()
-                .map(|l| OutLink { target: l.target.clone(), subpath: l.subpath.clone(), display: l.display.clone(), embed: l.kind == LinkKind::Embed, start: l.start, end: l.end, dst: None })
-                .collect();
-            self.resolve_links(id, &u.rel, &mut links);
-            let e = Entry {
-                id,
-                path: u.rel.clone(),
-                markdown: true,
-                size: u.size,
-                mtime_ns: u.mtime_ns,
-                hash: u.hash,
-                title: p.title.clone(),
-                aliases: p.aliases.clone(),
-                tags: p.tags.clone(),
-                headings: p.headings.iter().map(|h| (h.level, h.text.clone(), h.offset)).collect(),
-                links,
-                block_ids: p.block_ids.iter().map(|b| b.0.clone()).collect(),
-                word_count: p.word_count,
-                tasks_open: p.tasks.iter().filter(|t| !t.done).count() as u32,
-                tasks_done: p.tasks.iter().filter(|t| t.done).count() as u32,
-                frontmatter: p.frontmatter.clone(),
-                backlinks: old_back,
-            };
-            self.register_outgoing(&e, &mut back_add, &mut unresolved_dirty);
-            out.index_docs.push(IndexDoc {
-                file_id: id,
-                path: u.rel.clone(),
-                title: p.title.clone(),
-                aliases: p.aliases.clone(),
-                headings: p.headings.iter().map(|h| h.text.clone()).collect(),
-                tags: p.tags.clone(),
-                body: p.body_text,
-                mtime_ms: (u.mtime_ns / 1_000_000).max(0) as u64,
-            });
-            out.store.notes.push((
-                id,
-                Some(vault_store::NoteRec {
-                    title: e.title.clone(),
-                    aliases: e.aliases.clone(),
-                    tags: e.tags.clone(),
-                    frontmatter_json: e.frontmatter.as_ref().map(|f| f.to_string()).unwrap_or_default(),
-                    headings: e.headings.clone(),
-                    word_count: e.word_count,
-                }),
-            ));
-            out.store.links.push((id, link_records(&e)));
-            out.embed.push((id, u.chunks));
-            out.minhash.push((id, u.minhash));
+        // 3. build entries for reparsed notes: the expensive part (resolution, clones, records)
+        //    runs in parallel against the read-only resolver; registration is serial.
+        use rayon::prelude::*;
+        let built: Vec<Built> = {
+            let this = &*self;
+            reparsed
+                .into_par_iter()
+                .map(|(id, u)| {
+                    let p = u.parsed.expect("reparsed has parse");
+                    let mut links: Vec<OutLink> = p
+                        .links
+                        .iter()
+                        .map(|l| OutLink { target: l.target.clone(), subpath: l.subpath.clone(), display: l.display.clone(), embed: l.kind == LinkKind::Embed, start: l.start, end: l.end, dst: None })
+                        .collect();
+                    this.resolve_links(id, &u.rel, &mut links);
+                    let names: Vec<Option<String>> = links.iter().map(|l| target_name(&l.target)).collect();
+                    let e = Entry {
+                        id,
+                        path: u.rel.clone(),
+                        markdown: true,
+                        size: u.size,
+                        mtime_ns: u.mtime_ns,
+                        hash: u.hash,
+                        title: p.title.clone(),
+                        aliases: p.aliases.clone(),
+                        tags: p.tags.clone(),
+                        headings: p.headings.iter().map(|h| (h.level, h.text.clone(), h.offset)).collect(),
+                        links,
+                        block_ids: p.block_ids.iter().map(|b| b.0.clone()).collect(),
+                        word_count: p.word_count,
+                        tasks_open: p.tasks.iter().filter(|t| !t.done).count() as u32,
+                        tasks_done: p.tasks.iter().filter(|t| t.done).count() as u32,
+                        frontmatter: p.frontmatter,
+                        backlinks: this.entries[id as usize].as_ref().map(|o| o.backlinks.clone()).unwrap_or_default(),
+                    };
+                    let doc = IndexDoc {
+                        file_id: id,
+                        path: u.rel.clone(),
+                        title: p.title,
+                        aliases: p.aliases,
+                        headings: p.headings.into_iter().map(|h| h.text).collect(),
+                        tags: p.tags,
+                        body: p.body_text,
+                        mtime_ms: (u.mtime_ns / 1_000_000).max(0) as u64,
+                    };
+                    let note = vault_store::NoteRec {
+                        title: e.title.clone(),
+                        aliases: e.aliases.clone(),
+                        tags: e.tags.clone(),
+                        frontmatter_json: e.frontmatter.as_ref().map(|f| f.to_string()).unwrap_or_default(),
+                        headings: e.headings.clone(),
+                        word_count: e.word_count,
+                    };
+                    let links = link_records(&e);
+                    Built { e, names, doc, note, links, chunks: u.chunks, minhash: u.minhash }
+                })
+                .collect()
+        };
+        out.index_docs.reserve(built.len());
+        for b in built {
+            let Built { mut e, names, doc, note, links, chunks, minhash } = b;
+            let id = e.id;
+            let before = e.backlinks.len();
+            self.take_pending(id, &mut e.backlinks);
+            if e.backlinks.len() != before {
+                out.store.backlinks.push((id, e.backlinks.clone()));
+            }
+            self.register_outgoing_named(&e, &names, &mut back_add, &mut unresolved_dirty);
+            out.index_docs.push(doc);
+            out.store.notes.push((id, Some(note)));
+            out.store.links.push((id, links));
+            out.embed.push((id, chunks));
+            out.minhash.push((id, minhash));
             out.graph_changed = true;
             self.entries[id as usize] = Some(Arc::new(e));
         }
@@ -464,6 +537,11 @@ impl State {
     }
 
     fn register_outgoing(&mut self, e: &Entry, back_add: &mut HashMap<u32, Vec<u32>>, unresolved_dirty: &mut HashSet<String>) {
+        let names: Vec<Option<String>> = e.links.iter().map(|l| target_name(&l.target)).collect();
+        self.register_outgoing_named(e, &names, back_add, unresolved_dirty)
+    }
+
+    fn register_outgoing_named(&mut self, e: &Entry, names: &[Option<String>], back_add: &mut HashMap<u32, Vec<u32>>, unresolved_dirty: &mut HashSet<String>) {
         for l in &e.links {
             match l.dst {
                 Some(d) if d != e.id => back_add.entry(d).or_default().push(e.id),
@@ -477,8 +555,15 @@ impl State {
                     unresolved_dirty.insert(key);
                 }
             }
-            if let Some(n) = target_name(&l.target) {
-                self.by_target_name.entry(n).or_default().insert(e.id);
+        }
+        for n in names.iter().flatten() {
+            match self.by_target_name.get_mut(n) {
+                Some(set) => {
+                    set.insert(e.id);
+                }
+                None => {
+                    self.by_target_name.insert(n.clone(), HashSet::from([e.id]));
+                }
             }
         }
     }
@@ -492,9 +577,9 @@ impl State {
         Snapshot {
             generation: self.generation,
             entries: Arc::new(self.entries.clone()),
-            by_path: Arc::new(self.by_path.clone()),
+            by_path: self.by_path.clone(),
             dirs: Arc::new(self.dirs.iter().cloned().collect()),
-            unresolved: Arc::new(self.unresolved.clone()),
+            unresolved_targets: self.unresolved.len(),
             pagerank: Arc::new(self.pagerank.clone()),
             pagerank_max: pr_max,
             clusters: Arc::new(self.clusters.clone()),
@@ -524,6 +609,16 @@ impl State {
         }
         (vault_graph::Graph::new(n, &edges), active)
     }
+}
+
+struct Built {
+    e: Entry,
+    names: Vec<Option<String>>,
+    doc: IndexDoc,
+    note: vault_store::NoteRec,
+    links: Vec<(vault_store::LinkKey, vault_store::LinkRec)>,
+    chunks: Vec<Chunk>,
+    minhash: Option<[u32; vault_graph::PERMS]>,
 }
 
 fn link_records(e: &Entry) -> Vec<(vault_store::LinkKey, vault_store::LinkRec)> {

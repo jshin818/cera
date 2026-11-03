@@ -46,7 +46,7 @@ fn link_dump(e: &Engine) -> String {
             let sub = match l.subpath(&s.syms) { Some(vault_core::Subpath::Heading(h)) => format!("#{h}"), Some(vault_core::Subpath::Block(b)) => format!("#^{b}"), None => String::new() };
             out.push_str(&format!("  {}{}{} -> {}\n", if l.embed() { "!" } else { "" }, s.sym(l.target), sub, dst));
         }
-        let mut back: Vec<String> = n.backlinks.iter().filter_map(|b| s.get(*b)).map(|b| b.path.clone()).collect();
+        let mut back: Vec<String> = s.backlinks(n.id).iter().filter_map(|b| s.get(*b)).map(|b| b.path.clone()).collect();
         back.sort();
         out.push_str(&format!("  backlinks: {back:?}\n"));
     }
@@ -107,7 +107,7 @@ fn writes_rename_delete_and_conflicts() {
     let home = s.by_path("Home.md").unwrap();
     let missing = s.by_path("Missing Note.md").unwrap();
     assert!(home.links.iter().any(|l| l.dst() == Some(missing.id)), "unresolved link resolves on create");
-    assert!(missing.backlinks.contains(&home.id));
+    assert!(s.backlinks(missing.id).contains(&home.id));
     // rename rewrites links
     let to = e.rename("Gamma.md", "Projects/Gamma Renamed.md").unwrap();
     assert_eq!(to, "Projects/Gamma Renamed.md");
@@ -115,7 +115,7 @@ fn writes_rename_delete_and_conflicts() {
     assert!(home_src.contains("[[Gamma Renamed#Plan]]"), "{home_src}");
     let s = e.snapshot();
     let g = s.by_path("Projects/Gamma Renamed.md").unwrap();
-    assert!(g.backlinks.contains(&s.by_path("Home.md").unwrap().id));
+    assert!(s.backlinks(g.id).contains(&s.by_path("Home.md").unwrap().id));
     // conflict detection
     let v = e.read_note("Projects/Beta.md").unwrap();
     std::fs::write(d.path().join("Projects/Beta.md"), "changed outside").unwrap();
@@ -144,7 +144,7 @@ fn watcher_reflects_external_edits_quickly() {
         let s = e.snapshot();
         if seen_backlink.is_none() {
             if let (Some(h), Some(n)) = (s.by_path("Home.md"), s.by_path("New External.md")) {
-                if h.backlinks.contains(&n.id) {
+                if s.backlinks(h.id).contains(&n.id) {
                     seen_backlink = Some(t.elapsed());
                 }
             }

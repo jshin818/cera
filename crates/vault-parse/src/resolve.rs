@@ -87,6 +87,11 @@ impl LinkResolver {
         v
     }
 
+    /// Files that carry `name` (lower-cased) as an alias.
+    pub fn alias_candidates(&self, name: &str) -> Vec<u32> {
+        self.by_alias.get(name).into_iter().flatten().map(|&(id, _)| id).collect()
+    }
+
     /// Resolve a link target written in `from_path`. Empty targets (same-note links) resolve to `self_id`.
     pub fn resolve(&self, target: &str, from_path: &str, self_id: u32) -> Resolved {
         let t = target.trim().trim_start_matches("./").trim_start_matches('/');

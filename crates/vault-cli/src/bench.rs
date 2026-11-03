@@ -212,7 +212,7 @@ pub fn run(a: BenchArgs) -> Result<()> {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let s = e.snapshot();
-            let back_ok = s.by_path(&rel).is_some_and(|n| n.links.first().and_then(|l| l.dst()).and_then(|d| s.get(d)).is_some_and(|d| d.backlinks.contains(&n.id)));
+            let back_ok = s.by_path(&rel).is_some_and(|n| n.links.first().and_then(|l| l.dst()).and_then(|d| s.get(d)).is_some_and(|d| s.backlinks(d.id).contains(&n.id)));
             if back_ok && !e.search_text(&word, 1).unwrap_or_default().is_empty() {
                 ext.push(t.elapsed().as_secs_f64() * 1000.0);
                 break;

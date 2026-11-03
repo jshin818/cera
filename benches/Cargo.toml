@@ -6,3 +6,16 @@ publish = false
 
 [dependencies]
 vault-core.workspace = true
+vault-parse.workspace = true
+vault-fs.workspace = true
+vault-graph.workspace = true
+vault-search.workspace = true
+divan.workspace = true
+
+[[bench]]
+name = "parse"
+harness = false
+
+[[bench]]
+name = "switcher"
+harness = false

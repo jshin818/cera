@@ -38,20 +38,26 @@ fn splitmix(mut x: u64) -> u64 {
 impl MinHasher {
     /// Signature of a text, or None if it has fewer than 5 words.
     pub fn signature(&self, text: &str) -> Option<[u32; PERMS]> {
-        // Hash each normalized word once, then mix 5 word hashes per shingle (no allocation per shingle).
+        // Hash each normalized word once; shingle hashes are an O(1) mix of 5 word hashes.
         let mut buf = String::new();
-        let words: Vec<u64> = text
-            .split_whitespace()
-            .filter_map(|w| {
-                let w = w.trim_matches(|c: char| !c.is_alphanumeric());
-                if w.is_empty() {
-                    return None;
-                }
+        let mut words: Vec<u64> = Vec::with_capacity(text.len() / 6);
+        for w in text.split_whitespace() {
+            let w = w.trim_matches(|c: char| !c.is_alphanumeric());
+            if w.is_empty() {
+                continue;
+            }
+            let h = if w.is_ascii() {
+                buf.clear();
+                buf.push_str(w);
+                buf.make_ascii_lowercase();
+                xxhash_rust::xxh3::xxh3_64(buf.as_bytes())
+            } else {
                 buf.clear();
                 buf.extend(w.chars().flat_map(char::to_lowercase));
-                Some(xxhash_rust::xxh3::xxh3_64(buf.as_bytes()))
-            })
-            .collect();
+                xxhash_rust::xxh3::xxh3_64(buf.as_bytes())
+            };
+            words.push(h);
+        }
         if words.len() < 5 {
             return None;
         }
@@ -59,7 +65,7 @@ impl MinHasher {
         // per bin), then empty bins are densified from the next non-empty bin. O(shingles).
         let mut sig = [u32::MAX; PERMS];
         for sh in words.windows(5) {
-            let h = splitmix(sh[0] ^ splitmix(sh[1] ^ splitmix(sh[2] ^ splitmix(sh[3] ^ splitmix(sh[4] ^ self.b[0])))));
+            let h = splitmix(sh[0].rotate_left(7) ^ sh[1].rotate_left(19) ^ sh[2].rotate_left(31) ^ sh[3].rotate_left(43) ^ sh[4] ^ self.b[0]);
             let bin = (h % PERMS as u64) as usize;
             let v = (h >> 32) as u32;
             if v < sig[bin] {

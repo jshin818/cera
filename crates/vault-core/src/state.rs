@@ -75,8 +75,6 @@ pub struct Entry {
     pub word_count: u32,
     pub tasks_open: u32,
     pub tasks_done: u32,
-    /// Sorted, unique source ids that link or embed this file.
-    pub backlinks: Vec<u32>,
 }
 
 impl Entry {
@@ -91,6 +89,9 @@ pub struct Snapshot {
     pub generation: u64,
     pub syms: Arc<Interner>,
     pub entries: Arc<Vec<Option<Arc<Entry>>>>,
+    /// Backlinks per file id (sorted, unique source ids), kept apart from entries so a new link
+    /// replaces one small vector instead of cloning the target's whole entry.
+    pub back: Arc<Vec<Arc<Vec<u32>>>>,
     pub by_path: Arc<HashMap<String, u32>>,
     pub dirs: Arc<Vec<String>>,
     pub unresolved_targets: usize,
@@ -110,6 +111,10 @@ impl Snapshot {
 
     pub fn get(&self, id: u32) -> Option<&Arc<Entry>> {
         self.entries.get(id as usize).and_then(|e| e.as_ref())
+    }
+
+    pub fn backlinks(&self, id: u32) -> &[u32] {
+        self.back.get(id as usize).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
     pub fn by_path(&self, path: &str) -> Option<&Arc<Entry>> {
@@ -173,6 +178,7 @@ pub struct Applied {
 #[derive(Default)]
 pub struct State {
     pub entries: Vec<Option<Arc<Entry>>>,
+    pub back: Vec<Arc<Vec<u32>>>,
     /// Shared with snapshots; copied on write only when paths change.
     pub by_path: Arc<HashMap<String, u32>>,
     pub resolver: LinkResolver,
@@ -190,8 +196,9 @@ pub struct State {
     /// Ids allocated (and registered with the resolver) before their content was indexed, so the
     /// first index resolves every link once instead of re-resolving as batches arrive.
     pub preregistered: HashSet<u32>,
-    /// Backlinks for ids that have no entry yet.
-    pub pending_back: HashMap<u32, Vec<u32>>,
+    /// During the first index, intermediate snapshots omit the backlink table so updating it never
+    /// copies vectors still shared with a published snapshot.
+    pub defer_backlinks: bool,
 }
 
 pub fn target_name(target: &str) -> Option<String> {
@@ -270,6 +277,7 @@ impl State {
         }
         let id = self.entries.len() as u32;
         self.entries.push(None);
+        self.back.push(Arc::default());
         self.frecency.push(Frecency::default());
         Arc::make_mut(&mut self.by_path).insert(path.to_string(), id);
         (id, true)
@@ -300,14 +308,6 @@ impl State {
         }
     }
 
-    fn take_pending(&mut self, id: u32, into: &mut Vec<u32>) {
-        if let Some(p) = self.pending_back.remove(&id) {
-            into.extend(p);
-            into.sort_unstable();
-            into.dedup();
-        }
-    }
-
     fn resolve_links(&self, id: u32, path: &str, links: &mut [OutLink]) {
         for l in links.iter_mut() {
             l.dst = match self.resolver.resolve(&self.syms.get(l.target), path, id) {
@@ -318,25 +318,30 @@ impl State {
     }
 
     fn set_backlinks(&mut self, dst: u32, add: &[u32], remove: &[u32], touched: &mut HashSet<u32>) {
-        let Some(Some(e)) = self.entries.get(dst as usize) else {
-            if (dst as usize) < self.entries.len() {
-                let p = self.pending_back.entry(dst).or_default();
-                p.retain(|s| !remove.contains(s));
-                p.extend_from_slice(add);
-            }
+        let Some(slot) = self.back.get_mut(dst as usize) else { return };
+        let mut changed = false;
+        if remove.is_empty() && !add.is_empty() && slot.last().is_none_or(|l| add[0] > *l) {
+            // Common case in bulk indexing: new sources have higher ids; append.
+            Arc::make_mut(slot).extend_from_slice(add);
+            touched.insert(dst);
             return;
-        };
-        let mut b = e.backlinks.clone();
-        b.retain(|s| !remove.contains(s));
-        for &s in add {
-            if let Err(pos) = b.binary_search(&s) {
-                b.insert(pos, s);
+        }
+        if remove.iter().any(|s| slot.binary_search(s).is_ok()) || add.iter().any(|s| slot.binary_search(s).is_err()) {
+            let b = Arc::make_mut(slot);
+            for &s in remove {
+                if let Ok(i) = b.binary_search(&s) {
+                    b.remove(i);
+                    changed = true;
+                }
+            }
+            for &s in add {
+                if let Err(i) = b.binary_search(&s) {
+                    b.insert(i, s);
+                    changed = true;
+                }
             }
         }
-        if b != e.backlinks {
-            let mut ne = (**e).clone();
-            ne.backlinks = b;
-            self.entries[dst as usize] = Some(Arc::new(ne));
+        if changed {
             touched.insert(dst);
         }
     }
@@ -345,8 +350,11 @@ impl State {
     pub fn apply(&mut self, updates: Vec<FileUpdate>, removals: Vec<String>) -> Applied {
         let mut out = Applied::default();
         let mut affected_names: HashSet<String> = HashSet::new();
+        // Names that only gained/lost an alias: only links using that name can change.
+        let mut affected_aliases: HashSet<String> = HashSet::new();
         // dst -> (added srcs, removed srcs)
-        let mut back_add: HashMap<u32, Vec<u32>> = HashMap::new();
+        // (dst, src) pairs; sorted and grouped once at the end (cheaper than a map per link).
+        let mut back_add: Vec<(u32, u32)> = Vec::new();
         let mut back_rm: HashMap<u32, Vec<u32>> = HashMap::new();
         let mut touched_backlinks: HashSet<u32> = HashSet::new();
         let mut unresolved_dirty: HashSet<u32> = HashSet::new();
@@ -374,7 +382,6 @@ impl State {
             let Some(old) = self.entries[id as usize].take() else {
                 if self.preregistered.remove(&id) {
                     self.resolver.remove_file(id, &path);
-                    self.pending_back.remove(&id);
                 }
                 continue;
             };
@@ -393,7 +400,7 @@ impl State {
             out.graph_changed = true;
             out.changed_paths.push(path);
             // Sources that pointed at it now need re-resolution.
-            removed_sources.extend(old.backlinks.iter().copied());
+            removed_sources.extend(self.back[id as usize].iter().copied());
         }
 
         // 2. upserts (register files first so links between new files resolve)
@@ -408,7 +415,7 @@ impl State {
                 // Name already known to the resolver; only aliases are new information.
                 for a in &new_aliases {
                     self.resolver.add_alias(id, u.rel.len() as u32, a);
-                    affected_names.insert(a.to_lowercase());
+                    affected_aliases.insert(a.to_lowercase());
                 }
                 if vault_fs::FileKind::of(&u.rel) == vault_fs::FileKind::Markdown {
                     out.titles_changed = true;
@@ -433,7 +440,7 @@ impl State {
             out.store.files.push((id, Some(vault_store::FileRec { path: u.rel.clone(), size: u.size, mtime_ns: u.mtime_ns, xxh3: u.hash, markdown: vault_fs::FileKind::of(&u.rel) == vault_fs::FileKind::Markdown })));
             if u.parsed.is_none() {
                 // stat-only (or attachment)
-                let mut e = match old {
+                let e = match old {
                     Some(o) => Entry { size: u.size, mtime_ns: u.mtime_ns, hash: u.hash, ..(*o).clone() },
                     None => Entry {
                         id,
@@ -449,14 +456,8 @@ impl State {
                         word_count: 0,
                         tasks_open: 0,
                         tasks_done: 0,
-                        backlinks: Vec::new(),
                     },
                 };
-                let before = e.backlinks.len();
-                self.take_pending(id, &mut e.backlinks);
-                if e.backlinks.len() != before {
-                    out.store.backlinks.push((id, e.backlinks.clone()));
-                }
                 self.entries[id as usize] = Some(Arc::new(e));
                 continue;
             }
@@ -491,7 +492,6 @@ impl State {
                         word_count: p.word_count,
                         tasks_open: p.tasks.iter().filter(|t| !t.done).count() as u32,
                         tasks_done: p.tasks.iter().filter(|t| t.done).count() as u32,
-                        backlinks: this.entries[id as usize].as_ref().map(|o| o.backlinks.clone()).unwrap_or_default(),
                     };
                     let note_headings: Vec<(u8, String, u32)> = p.headings.iter().map(|h| (h.level, h.text.clone(), h.offset)).collect();
                     let fm_json = p.frontmatter.as_ref().map(|f| f.to_string()).unwrap_or_default();
@@ -520,13 +520,8 @@ impl State {
         };
         out.index_docs.reserve(built.len());
         for b in built {
-            let Built { mut e, doc, note, links, chunks, minhash } = b;
+            let Built { e, doc, note, links, chunks, minhash } = b;
             let id = e.id;
-            let before = e.backlinks.len();
-            self.take_pending(id, &mut e.backlinks);
-            if e.backlinks.len() != before {
-                out.store.backlinks.push((id, e.backlinks.clone()));
-            }
             self.register_outgoing(&e, &mut back_add, &mut unresolved_dirty);
             out.index_docs.push(doc);
             out.store.notes.push((id, Some(note)));
@@ -546,8 +541,22 @@ impl State {
                 sources.extend(s.iter().copied());
             }
             for f in self.resolver.candidates(n) {
-                if let Some(Some(fe)) = self.entries.get(f as usize) {
-                    sources.extend(fe.backlinks.iter().copied());
+                if let Some(b) = self.back.get(f as usize) {
+                    sources.extend(b.iter().copied());
+                }
+            }
+        }
+        for n in &affected_aliases {
+            if affected_names.contains(n) {
+                continue;
+            }
+            if let Some(s) = self.syms.lookup(n).and_then(|sym| self.unresolved.get(&sym)) {
+                sources.extend(s.iter().copied());
+            }
+            // A file name always beats an alias, so only other alias holders can lose sources.
+            for f in self.resolver.alias_candidates(n) {
+                if let Some(b) = self.back.get(f as usize) {
+                    sources.extend(b.iter().copied());
                 }
             }
         }
@@ -582,16 +591,25 @@ impl State {
         }
 
         // 5. backlinks: apply removals then additions (a src may appear in both when links persist)
-        let dsts: HashSet<u32> = back_add.keys().chain(back_rm.keys()).copied().collect();
-        for d in dsts {
-            let add = back_add.remove(&d).unwrap_or_default();
-            let rm: Vec<u32> = back_rm.remove(&d).unwrap_or_default().into_iter().filter(|s| !add.contains(s)).collect();
+        back_add.sort_unstable();
+        back_add.dedup();
+        let mut i = 0;
+        while i < back_add.len() {
+            let d = back_add[i].0;
+            let mut j = i;
+            while j < back_add.len() && back_add[j].0 == d {
+                j += 1;
+            }
+            let add: Vec<u32> = back_add[i..j].iter().map(|x| x.1).collect();
+            let rm: Vec<u32> = back_rm.remove(&d).unwrap_or_default().into_iter().filter(|s| add.binary_search(s).is_err()).collect();
             self.set_backlinks(d, &add, &rm, &mut touched_backlinks);
+            i = j;
+        }
+        for (d, rm) in std::mem::take(&mut back_rm) {
+            self.set_backlinks(d, &[], &rm, &mut touched_backlinks);
         }
         for d in touched_backlinks {
-            if let Some(Some(e)) = self.entries.get(d as usize) {
-                out.store.backlinks.push((d, e.backlinks.clone()));
-            }
+            out.store.backlinks.push((d, self.back[d as usize].to_vec()));
         }
         for key in unresolved_dirty {
             let v = self.unresolved.get(&key).cloned().unwrap_or_default();
@@ -606,10 +624,10 @@ impl State {
         out
     }
 
-    fn register_outgoing(&mut self, e: &Entry, back_add: &mut HashMap<u32, Vec<u32>>, unresolved_dirty: &mut HashSet<u32>) {
+    fn register_outgoing(&mut self, e: &Entry, back_add: &mut Vec<(u32, u32)>, unresolved_dirty: &mut HashSet<u32>) {
         for l in &e.links {
             match l.dst() {
-                Some(d) if d != e.id => back_add.entry(d).or_default().push(e.id),
+                Some(d) if d != e.id => back_add.push((d, e.id)),
                 Some(_) => {}
                 None => {
                     let k = self.name_sym(l.target);
@@ -625,13 +643,14 @@ impl State {
     pub fn snapshot(&self) -> Snapshot {
         let now = crate::now_ms();
         let pr_max = self.pagerank.iter().copied().fold(0.0, f32::max);
-        let fr_max = self.frecency.iter().map(|f| f.decayed(now)).fold(0.0, f32::max);
+        let fr_max = self.frecency.iter().filter(|f| f.score > 0.0).map(|f| f.decayed(now)).fold(0.0, f32::max);
         let notes = self.entries.iter().flatten().filter(|e| e.markdown).count();
         let total = self.entries.iter().flatten().count();
         Snapshot {
             generation: self.generation,
             syms: self.syms.clone(),
             entries: Arc::new(self.entries.clone()),
+            back: if self.defer_backlinks { Arc::default() } else { Arc::new(self.back.clone()) },
             by_path: self.by_path.clone(),
             dirs: Arc::new(self.dirs.iter().cloned().collect()),
             unresolved_targets: self.unresolved.len(),

@@ -74,7 +74,6 @@ pub fn hydrate_core(d: SnapshotData) -> State {
                     word_count: e.word_count,
                     tasks_open: e.tasks_open,
                     tasks_done: e.tasks_done,
-                    backlinks: Vec::new(),
                 })
             })
         })
@@ -92,6 +91,7 @@ pub fn hydrate_core(d: SnapshotData) -> State {
             }
         }
     }
+    st.back = vec![Arc::default(); n];
     st.entries = entries;
     st.dirs = d.dirs.into_iter().collect();
     st.pagerank = d.pagerank;
@@ -152,13 +152,12 @@ pub fn attach_links(st: &mut State, a: &vault_store::snapshot::ArchivedLinksData
         v.sort_unstable();
         v.dedup();
     }
-    for (slot, mut b) in st.entries.iter_mut().zip(back) {
-        if let Some(e) = slot {
-            if !b.is_empty() {
-                b.sort_unstable();
-                b.dedup();
-                Arc::make_mut(e).backlinks = b;
-            }
-        }
-    }
+    st.back = back
+        .into_iter()
+        .map(|mut b| {
+            b.sort_unstable();
+            b.dedup();
+            Arc::new(b)
+        })
+        .collect();
 }

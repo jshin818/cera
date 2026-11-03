@@ -311,6 +311,7 @@ impl Engine {
             let h = std::thread::Builder::new()
                 .name("vault-store".into())
                 .spawn(move || {
+                    indexer::lower_priority();
                     while let Ok(b) = store_rx.recv() {
                         let Some(inner) = e.upgrade() else { break };
                         if let Err(err) = inner.store().apply(&b) {

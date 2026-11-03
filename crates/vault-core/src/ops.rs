@@ -80,7 +80,7 @@ impl Engine {
             tags: e.map(|e| e.tags.clone()).unwrap_or_default(),
             aliases: e.map(|e| e.aliases.clone()).unwrap_or_default(),
             words: e.map(|e| e.word_count).unwrap_or(0),
-            backlinks: e.map(|e| e.backlinks.len()).unwrap_or(0),
+            backlinks: e.map(|e| snap.backlinks(e.id).len()).unwrap_or(0),
             path,
             content,
         })
@@ -180,7 +180,7 @@ impl Engine {
                 to.clone()
             }
         };
-        for src_id in &e.backlinks {
+        for src_id in snap.backlinks(e.id) {
             let Some(src) = snap.get(*src_id) else { continue };
             let src_path = if src.path == from { to.clone() } else { src.path.clone() };
             let Ok(bytes) = vault_fs::read(&self.0.root, &src_path) else { continue };

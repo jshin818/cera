@@ -290,7 +290,7 @@ impl Engine {
         let snap = self.snapshot();
         let e = snap.by_path(path).ok_or_else(|| crate::CoreError::NotFound(path.into()))?;
         let mut out = Vec::new();
-        for &src_id in &e.backlinks {
+        for &src_id in snap.backlinks(e.id) {
             let Some(src) = snap.get(src_id) else { continue };
             let Some(text) = self.read_src(&src.path) else { continue };
             for l in src.links.iter().filter(|l| l.dst() == Some(e.id)) {
@@ -411,7 +411,7 @@ impl Engine {
             let mut next = Vec::new();
             for &f in &frontier {
                 let Some(e) = snap.get(f) else { continue };
-                let nbrs = e.links.iter().filter_map(|l| l.dst()).chain(e.backlinks.iter().copied());
+                let nbrs = e.links.iter().filter_map(|l| l.dst()).chain(snap.backlinks(f).iter().copied());
                 for n in nbrs {
                     if snap.get(n).is_none_or(|x| !x.markdown) || n == f {
                         continue;
@@ -640,7 +640,7 @@ impl Engine {
         for e in snap.notes() {
             words += e.word_count as u64;
             links += e.links.iter().filter(|l| l.dst().is_some()).count();
-            if e.backlinks.is_empty() && e.links.iter().all(|l| l.dst().is_none()) {
+            if snap.backlinks(e.id).is_empty() && e.links.iter().all(|l| l.dst().is_none()) {
                 orphans += 1;
             }
             open += e.tasks_open as u64;
@@ -680,7 +680,7 @@ impl Engine {
             y: pos(e.id)[1],
             rank: snap.pagerank_norm(e.id),
             cluster: snap.cluster(e.id).unwrap_or(0),
-            degree: (e.backlinks.len() + e.links.iter().filter(|l| l.dst().is_some()).count()) as u32,
+            degree: (snap.backlinks(e.id).len() + e.links.iter().filter(|l| l.dst().is_some()).count()) as u32,
         };
         let nclusters = snap.clusters.iter().filter(|&&c| c != u32::MAX).max().map(|m| *m as usize + 1).unwrap_or(0);
         if let Some(c) = center {

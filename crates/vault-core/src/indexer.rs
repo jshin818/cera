@@ -289,28 +289,39 @@ fn sync_with_disk(engine: &Engine, files: Vec<vault_fs::WalkedFile>, dirs: Vec<S
         }
     }
     let n = changed.len();
+    let bulk = changed.len() > 4000;
     {
         let new_paths: Vec<&str> = changed.iter().map(|f| f.rel.as_str()).collect();
-        inner.state.lock().preregister(&new_paths);
+        let mut st = inner.state.lock();
+        st.preregister(&new_paths);
+        st.defer_backlinks = bulk;
     }
     // Bounded batches keep peak memory flat on the first index of a large vault.
     let mut reparsed = 0;
     let mut first = true;
-    for batch in changed.chunks(4000) {
+    // Pipeline: batch N+1 is read and parsed while batch N is applied (apply is mostly serial).
+    let batches: Vec<&[vault_fs::WalkedFile]> = changed.chunks(4000).collect();
+    let mut next = batches.first().map(|b| read_and_parse(inner, b, false));
+    for i in 0..batches.len() {
         if inner.shutdown.load(Ordering::SeqCst) {
             break;
         }
-        let t = Instant::now();
-        let updates = read_and_parse(inner, batch, false);
-        let t_parse = ms(t);
+        let updates = next.take().unwrap_or_default();
         reparsed += updates.iter().filter(|u| u.parsed.is_some()).count();
         let t = Instant::now();
-        apply(engine, updates, if first { removed.clone() } else { Vec::new() }, false);
-        tracing::info!(files = batch.len(), parse_ms = t_parse, apply_ms = ms(t), "index batch");
+        let rm = if first { removed.clone() } else { Vec::new() };
+        let ((), parsed) = rayon::join(|| { apply(engine, updates, rm, false); }, || batches.get(i + 1).map(|b| read_and_parse(inner, b, false)));
+        next = parsed;
+        tracing::info!(files = batches[i].len(), ms = ms(t), "index batch");
         first = false;
     }
     if first && !removed.is_empty() {
         apply(engine, Vec::new(), removed, false);
+    }
+    if bulk {
+        let mut st = inner.state.lock();
+        st.defer_backlinks = false;
+        publish(inner, &st);
     }
     tracing::debug!(changed = n, reparsed, "sync with disk");
     reparsed

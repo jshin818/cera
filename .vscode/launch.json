@@ -1,0 +1,13 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug Cera server (demo vault)",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": { "args": ["build", "-p", "vault-cli", "--bin", "vault"] },
+      "args": ["serve", "crates/vault-core/tests/fixtures/sample-vault", "--open"],
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

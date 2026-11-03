@@ -1,0 +1,4 @@
+{
+  "rust-analyzer.cargo.features": [],
+  "files.watcherExclude": { "**/target/**": true, "**/ui/node_modules/**": true, "**/.vault/**": true }
+}

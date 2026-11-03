@@ -1,0 +1,44 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Cera: run (demo vault)",
+      "detail": "Build the engine and open the app in your browser on the sample vault",
+      "type": "shell",
+      "command": "cargo run --release -p vault-cli -- serve crates/vault-core/tests/fixtures/sample-vault --open",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": ["$rustc"],
+      "isBackground": false
+    },
+    {
+      "label": "Cera: run (choose vault)",
+      "detail": "Serve any folder of Markdown notes (e.g. ~/Notes or an Obsidian vault)",
+      "type": "shell",
+      "command": "cargo run --release -p vault-cli -- serve \"${input:vault}\" --open",
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "Cera: desktop app",
+      "detail": "Run the native Tauri window (macOS)",
+      "type": "shell",
+      "command": "cargo run --release -p vault-app",
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "Cera: rebuild UI",
+      "type": "shell",
+      "command": "npm install && npm run build",
+      "options": { "cwd": "${workspaceFolder}/ui" }
+    },
+    {
+      "label": "Cera: test",
+      "type": "shell",
+      "command": "cargo test",
+      "group": "test",
+      "problemMatcher": ["$rustc"]
+    }
+  ],
+  "inputs": [
+    { "id": "vault", "type": "promptString", "description": "Path to your notes folder", "default": "${userHome}/Notes" }
+  ]
+}

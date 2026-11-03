@@ -42,7 +42,8 @@ fn check_rel(path: &str) -> Result<String> {
 
 /// File-name-safe version of a title (Obsidian forbids these characters in names).
 pub fn safe_name(title: &str) -> String {
-    let s: String = title.chars().map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '#' | '^' | '[' | ']') { ' ' } else { c }).collect();
+    let s: String =
+        title.chars().map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '#' | '^' | '[' | ']') { ' ' } else { c }).collect();
     let s = s.split_whitespace().collect::<Vec<_>>().join(" ");
     let s = s.trim_start_matches('.').trim();
     if s.is_empty() { "Untitled".to_string() } else { s.chars().take(120).collect() }
@@ -94,15 +95,15 @@ impl Engine {
             return Err(CoreError::Invalid("only Markdown notes can be saved".into()));
         }
         let new_hash = vault_fs::hash_bytes(content.as_bytes());
-        if let Some(base) = base_hash {
-            if let Ok(disk) = vault_fs::read(&self.0.root, &path) {
-                let dh = vault_fs::hash_bytes(&disk);
-                if hex(dh) != base && dh != new_hash {
-                    return Err(CoreError::Conflict { disk_hash: dh });
-                }
-                if dh == new_hash {
-                    return Ok(SaveOutcome { path, hash: hex(dh), generation: self.snapshot().generation });
-                }
+        if let Some(base) = base_hash
+            && let Ok(disk) = vault_fs::read(&self.0.root, &path)
+        {
+            let dh = vault_fs::hash_bytes(&disk);
+            if hex(dh) != base && dh != new_hash {
+                return Err(CoreError::Conflict { disk_hash: dh });
+            }
+            if dh == new_hash {
+                return Ok(SaveOutcome { path, hash: hex(dh), generation: self.snapshot().generation });
             }
         }
         let h = self.record_write(&path, content.as_bytes())?;
@@ -294,7 +295,11 @@ impl Engine {
     pub fn save_attachment(&self, note_path: &str, file_name: &str, bytes: &[u8]) -> Result<String> {
         let dir = self.0.cfg.attachment_dir_for(note_path);
         let clean = safe_name(file_name.rsplit_once('.').map(|(a, _)| a).unwrap_or(file_name));
-        let ext = file_name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).filter(|e| e.len() <= 5 && e.chars().all(|c| c.is_ascii_alphanumeric())).unwrap_or_else(|| "bin".into());
+        let ext = file_name
+            .rsplit_once('.')
+            .map(|(_, e)| e.to_ascii_lowercase())
+            .filter(|e| e.len() <= 5 && e.chars().all(|c| c.is_ascii_alphanumeric()))
+            .unwrap_or_else(|| "bin".into());
         let mut i = 0;
         let path = loop {
             let n = if i == 0 { format!("{clean}.{ext}") } else { format!("{clean} {i}.{ext}") };

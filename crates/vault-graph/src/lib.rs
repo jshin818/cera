@@ -11,5 +11,5 @@ pub use csr::Graph;
 pub use layout::{Layout, LayoutParams};
 pub use leiden::leiden;
 pub use mentions::{Mention, MentionIndex};
-pub use minhash::{jaccard_estimate, MinHasher, NearDupIndex, PERMS};
+pub use minhash::{MinHasher, NearDupIndex, PERMS, jaccard_estimate};
 pub use rank::{adamic_adar, pagerank, personalized_pagerank};

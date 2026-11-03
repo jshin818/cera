@@ -1,7 +1,7 @@
 //! Model2Vec static embeddings: a token embedding matrix plus a WordPiece or Unigram vocab.
 //! Embedding = mean of token vectors (optionally weighted), L2-normalized, truncated to 256 dims.
 
-use crate::{normalize, EmbedError, Embedder, Result, DIMS};
+use crate::{DIMS, EmbedError, Embedder, Result, normalize};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -21,7 +21,11 @@ impl StaticModel {
         let bytes = std::fs::read(dir.join("model.safetensors"))?;
         let st = safetensors::SafeTensors::deserialize(&bytes).map_err(|e| EmbedError::Format(e.to_string()))?;
         let names = st.names();
-        let tname = if names.iter().any(|n| *n == "embeddings") { "embeddings".to_string() } else { names.first().map(|s| s.to_string()).ok_or_else(|| EmbedError::Format("no tensors".into()))? };
+        let tname = if names.contains(&"embeddings") {
+            "embeddings".to_string()
+        } else {
+            names.first().map(|s| s.to_string()).ok_or_else(|| EmbedError::Format("no tensors".into()))?
+        };
         let t = st.tensor(&tname).map_err(|e| EmbedError::Format(e.to_string()))?;
         let shape = t.shape();
         if shape.len() != 2 {
@@ -212,8 +216,20 @@ mod tests {
         for (i, _) in vocab.iter().enumerate() {
             for d in 0..dim {
                 let x: f32 = match i {
-                    1..=3 | 6 => if d < 3 { 1.0 } else { 0.0 },
-                    4 | 5 => if d >= 5 { 1.0 } else { 0.0 },
+                    1..=3 | 6 => {
+                        if d < 3 {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    }
+                    4 | 5 => {
+                        if d >= 5 {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    }
                     _ => 0.01,
                 };
                 data.extend_from_slice(&x.to_le_bytes());
@@ -222,7 +238,11 @@ mod tests {
         let view = safetensors::tensor::TensorView::new(safetensors::Dtype::F32, vec![vocab.len(), dim], &data).unwrap();
         safetensors::serialize_to_file([("embeddings", view)], None, &dir.join("model.safetensors")).unwrap();
         let v: serde_json::Map<String, serde_json::Value> = vocab.iter().enumerate().map(|(i, t)| (t.to_string(), serde_json::json!(i))).collect();
-        std::fs::write(dir.join("tokenizer.json"), serde_json::json!({"model": {"type": "WordPiece", "unk_token": "[UNK]", "vocab": v}, "normalizer": {"lowercase": true}}).to_string()).unwrap();
+        std::fs::write(
+            dir.join("tokenizer.json"),
+            serde_json::json!({"model": {"type": "WordPiece", "unk_token": "[UNK]", "vocab": v}, "normalizer": {"lowercase": true}}).to_string(),
+        )
+        .unwrap();
     }
 
     #[test]

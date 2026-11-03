@@ -184,7 +184,8 @@ impl NearDupIndex {
                 guard += 1;
             }
         }
-        let mut out: Vec<(u32, f32)> = cands.into_iter().filter_map(|c| Some((c, jaccard_estimate(&node.sig, &self.nodes.get(&c)?.sig)))).filter(|(_, j)| *j >= threshold).collect();
+        let mut out: Vec<(u32, f32)> =
+            cands.into_iter().filter_map(|c| Some((c, jaccard_estimate(&node.sig, &self.nodes.get(&c)?.sig)))).filter(|(_, j)| *j >= threshold).collect();
         out.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
         out
     }

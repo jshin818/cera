@@ -27,9 +27,8 @@ impl MentionIndex {
                 targets.push(id);
             }
         }
-        let ac = (!pats.is_empty()).then(|| {
-            AhoCorasickBuilder::new().ascii_case_insensitive(true).match_kind(MatchKind::LeftmostLongest).build(&pats).expect("aho-corasick build")
-        });
+        let ac = (!pats.is_empty())
+            .then(|| AhoCorasickBuilder::new().ascii_case_insensitive(true).match_kind(MatchKind::LeftmostLongest).build(&pats).expect("aho-corasick build"));
         MentionIndex { ac, targets }
     }
 

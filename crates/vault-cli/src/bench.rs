@@ -64,10 +64,10 @@ pub fn rss_parts() -> (f64, f64) {
 }
 
 pub fn rss_mb() -> f64 {
-    if let Ok(s) = std::fs::read_to_string("/proc/self/status") {
-        if let Some(l) = s.lines().find(|l| l.starts_with("VmRSS:")) {
-            return l.split_whitespace().nth(1).and_then(|x| x.parse::<f64>().ok()).unwrap_or(0.0) / 1024.0;
-        }
+    if let Ok(s) = std::fs::read_to_string("/proc/self/status")
+        && let Some(l) = s.lines().find(|l| l.starts_with("VmRSS:"))
+    {
+        return l.split_whitespace().nth(1).and_then(|x| x.parse::<f64>().ok()).unwrap_or(0.0) / 1024.0;
     }
     // macOS
     std::process::Command::new("ps")
@@ -105,7 +105,12 @@ pub fn run(a: BenchArgs) -> Result<()> {
         let e = Engine::open(&vault, EngineOptions { watch: false, embed, ..Default::default() })?;
         let (_, ms) = time(|| e.wait_ready(Duration::from_secs(1800)));
         let t = e.timings();
-        rows.push(row("First index of new vault (text)", 10_000.0, vec![t.ready_ms.max(ms)], format!("walk {:.0} ms, parse+index {:.0} ms, {} files", t.walk_ms, t.index_ms, t.files_reparsed)));
+        rows.push(row(
+            "First index of new vault (text)",
+            10_000.0,
+            vec![t.ready_ms.max(ms)],
+            format!("walk {:.0} ms, parse+index {:.0} ms, {} files", t.walk_ms, t.index_ms, t.files_reparsed),
+        ));
         if embed {
             eprintln!("  first embedding pass...");
             let (_, ms) = time(|| e.wait_embeddings(Duration::from_secs(1800)));
@@ -218,7 +223,9 @@ pub fn run(a: BenchArgs) -> Result<()> {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let s = e.snapshot();
-            let back_ok = s.by_path(&rel).is_some_and(|n| n.links.first().and_then(|l| l.dst()).and_then(|d| s.get(d)).is_some_and(|d| s.backlinks(d.id).contains(&n.id)));
+            let back_ok = s
+                .by_path(&rel)
+                .is_some_and(|n| n.links.first().and_then(|l| l.dst()).and_then(|d| s.get(d)).is_some_and(|d| s.backlinks(d.id).contains(&n.id)));
             if back_ok && !e.search_text(&word, 1).unwrap_or_default().is_empty() {
                 ext.push(t.elapsed().as_secs_f64() * 1000.0);
                 break;
@@ -249,9 +256,14 @@ pub fn run(a: BenchArgs) -> Result<()> {
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
     let anon = v["anon_mb"].as_f64().unwrap_or(f64::NAN);
     let total = v["rss_mb"].as_f64().unwrap_or(f64::NAN);
-    rows.push(row("Idle memory (MB, anonymous)", 300.0, vec![anon], format!("fresh process after indexing settles; total RSS incl. clean mmapped index pages {total:.0} MB")));
+    rows.push(row(
+        "Idle memory (MB, anonymous)",
+        300.0,
+        vec![anon],
+        format!("fresh process after indexing settles; total RSS incl. clean mmapped index pages {total:.0} MB"),
+    ));
 
-    println!("\n{:<46} {:>9} {:>9} {:>9} {:>9}  {}", "Interaction", "budget", "p50", "p95", "p99", "result");
+    println!("\n{:<46} {:>9} {:>9} {:>9} {:>9}  result", "Interaction", "budget", "p50", "p95", "p99");
     for r in &rows {
         println!("{:<46} {:>9.1} {:>9.2} {:>9.2} {:>9.2}  {}  {}", r.name, r.budget_ms, r.p50, r.p95, r.p99, if r.pass { "PASS" } else { "FAIL" }, r.note);
     }

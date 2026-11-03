@@ -1,6 +1,6 @@
 use crate::Result;
 use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::path::Path;
 
 type Bytes = &'static [u8];
@@ -165,7 +165,8 @@ impl Store {
             }
             let mut links = w.open_table(LINKS)?;
             for (src, list) in &b.links {
-                let stale: Vec<LinkKey> = links.range((*src, 0u32, 0u8)..=(*src, u32::MAX, u8::MAX))?.map(|r| r.map(|(k, _)| k.value())).collect::<std::result::Result<_, _>>()?;
+                let stale: Vec<LinkKey> =
+                    links.range((*src, 0u32, 0u8)..=(*src, u32::MAX, u8::MAX))?.map(|r| r.map(|(k, _)| k.value())).collect::<std::result::Result<_, _>>()?;
                 for k in stale {
                     links.remove(k)?;
                 }

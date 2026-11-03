@@ -7,8 +7,8 @@ mod switcher;
 mod text;
 
 pub use frecency::{Frecency, HALF_LIFE_MS};
-pub use fusion::{rrf, RRF_K};
-pub use query::{parse_query, Clause, ParsedQuery};
+pub use fusion::{RRF_K, rrf};
+pub use query::{Clause, ParsedQuery, parse_query};
 pub use switcher::{SwitchHit, SwitchItem, Switcher};
 pub use text::{IndexDoc, TextHit, TextIndex};
 

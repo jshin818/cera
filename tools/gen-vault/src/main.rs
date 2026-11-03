@@ -31,8 +31,8 @@ struct Args {
 }
 
 const SYL: &[&str] = &[
-    "ka", "lo", "mi", "ra", "ten", "vo", "shi", "na", "per", "dor", "al", "en", "ti", "qua", "ber", "son", "ex", "lin", "mar", "ost", "rin", "ul", "zan", "fel",
-    "gor", "hal", "ix", "jo", "kel", "mon", "nis", "ophe", "pra", "rus", "sel", "tor", "ur", "ven", "wy", "zel",
+    "ka", "lo", "mi", "ra", "ten", "vo", "shi", "na", "per", "dor", "al", "en", "ti", "qua", "ber", "son", "ex", "lin", "mar", "ost", "rin", "ul", "zan",
+    "fel", "gor", "hal", "ix", "jo", "kel", "mon", "nis", "ophe", "pra", "rus", "sel", "tor", "ur", "ven", "wy", "zel",
 ];
 const COMMON: &[&str] = &[
     "the", "and", "of", "to", "in", "a", "is", "that", "for", "it", "as", "with", "was", "on", "be", "by", "this", "are", "from", "at", "or", "an", "which",
@@ -40,10 +40,56 @@ const COMMON: &[&str] = &[
     "design", "data", "review", "question", "result", "change", "team", "reading", "summary", "draft", "meeting", "goal", "process", "example", "model",
 ];
 const TOPICS: &[&str] = &[
-    "Engineering", "Research", "Reading", "Journal", "People", "Projects", "Cooking", "Travel", "Health", "Finance", "Music", "Philosophy", "History",
-    "Writing", "Design", "Garden", "Physics", "Biology", "Language", "Teaching", "Startups", "Movies", "Games", "Fitness", "Photography", "Architecture",
-    "Economics", "Psychology", "Math", "Ops", "Security", "Product", "Marketing", "Hiring", "Home", "Family", "Climbing", "Coffee", "Wine", "Art",
-    "Poetry", "Chess", "Astronomy", "Geology", "Ocean", "Birds", "Cars", "Bikes", "Running", "Meditation",
+    "Engineering",
+    "Research",
+    "Reading",
+    "Journal",
+    "People",
+    "Projects",
+    "Cooking",
+    "Travel",
+    "Health",
+    "Finance",
+    "Music",
+    "Philosophy",
+    "History",
+    "Writing",
+    "Design",
+    "Garden",
+    "Physics",
+    "Biology",
+    "Language",
+    "Teaching",
+    "Startups",
+    "Movies",
+    "Games",
+    "Fitness",
+    "Photography",
+    "Architecture",
+    "Economics",
+    "Psychology",
+    "Math",
+    "Ops",
+    "Security",
+    "Product",
+    "Marketing",
+    "Hiring",
+    "Home",
+    "Family",
+    "Climbing",
+    "Coffee",
+    "Wine",
+    "Art",
+    "Poetry",
+    "Chess",
+    "Astronomy",
+    "Geology",
+    "Ocean",
+    "Birds",
+    "Cars",
+    "Bikes",
+    "Running",
+    "Meditation",
 ];
 
 fn word(rng: &mut StdRng, n_syl: usize) -> String {
@@ -142,7 +188,15 @@ fn main() -> Result<()> {
             let mut rng = StdRng::seed_from_u64(seed ^ (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
             let tp = &topics[*t];
             let mut s = String::with_capacity(a.avg_bytes + 512);
-            let tags: Vec<String> = (0..rng.random_range(0..4)).map(|_| if rng.random_bool(0.5) { format!("{}/{}", tp.name.to_lowercase(), tp.subs[rng.random_range(0..tp.subs.len())].to_lowercase()) } else { tp.name.to_lowercase() }).collect();
+            let tags: Vec<String> = (0..rng.random_range(0..4))
+                .map(|_| {
+                    if rng.random_bool(0.5) {
+                        format!("{}/{}", tp.name.to_lowercase(), tp.subs[rng.random_range(0..tp.subs.len())].to_lowercase())
+                    } else {
+                        tp.name.to_lowercase()
+                    }
+                })
+                .collect();
             if rng.random_bool(0.6) {
                 s.push_str("---\n");
                 if !tags.is_empty() {
@@ -163,7 +217,12 @@ fn main() -> Result<()> {
             while s.len() < target {
                 if rng.random_bool(0.25) {
                     section += 1;
-                    let _ = writeln!(s, "{} {}\n", if rng.random_bool(0.7) { "##" } else { "###" }, capitalize(&format!("{} {}", zipf(&mut rng, &tp.vocab), zipf(&mut rng, &global))));
+                    let _ = writeln!(
+                        s,
+                        "{} {}\n",
+                        if rng.random_bool(0.7) { "##" } else { "###" },
+                        capitalize(&format!("{} {}", zipf(&mut rng, &tp.vocab), zipf(&mut rng, &global)))
+                    );
                 }
                 // paragraph
                 let words = rng.random_range(30..110);
@@ -172,7 +231,11 @@ fn main() -> Result<()> {
                     let r: f64 = rng.random();
                     let tok = if r < 0.045 {
                         // link: 80% same topic
-                        let j = if rng.random_bool(0.8) && !by_topic[*t].is_empty() { by_topic[*t][rng.random_range(0..by_topic[*t].len())] } else { rng.random_range(0..notes.len()) };
+                        let j = if rng.random_bool(0.8) && !by_topic[*t].is_empty() {
+                            by_topic[*t][rng.random_range(0..by_topic[*t].len())]
+                        } else {
+                            rng.random_range(0..notes.len())
+                        };
                         let tgt = &notes[j].2;
                         match rng.random_range(0..10) {
                             0 => format!("[[{tgt}|{}]]", zipf(&mut rng, &tp.vocab)),
@@ -238,7 +301,14 @@ fn main() -> Result<()> {
         let _ = writeln!(q, "{line}");
     }
     std::fs::write(a.out.join(".vault-bench-queries.txt"), q)?;
-    eprintln!("wrote {} notes ({:.1} MB, avg {} B) and {} attachments to {}", notes.len(), total as f64 / 1e6, total / notes.len().max(1), n_att, a.out.display());
+    eprintln!(
+        "wrote {} notes ({:.1} MB, avg {} B) and {} attachments to {}",
+        notes.len(),
+        total as f64 / 1e6,
+        total / notes.len().max(1),
+        n_att,
+        a.out.display()
+    );
     Ok(())
 }
 

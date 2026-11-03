@@ -33,7 +33,7 @@ impl Graph {
 
     pub fn from_weighted_undirected(n: usize, edges: &[(u32, u32, f32)]) -> Graph {
         let mut e: Vec<(u32, u32, f32)> = edges.iter().flat_map(|&(a, b, w)| [(a, b, w), (b, a, w)]).filter(|e| e.0 != e.1).collect();
-        e.sort_by(|x, y| (x.0, x.1).cmp(&(y.0, y.1)));
+        e.sort_by_key(|x| (x.0, x.1));
         let mut merged: Vec<(u32, u32, f32)> = Vec::with_capacity(e.len());
         for x in e {
             match merged.last_mut() {

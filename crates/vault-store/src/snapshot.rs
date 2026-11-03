@@ -204,7 +204,11 @@ mod tests {
             pagerank: vec![0.5, 0.5],
             ..Default::default()
         };
-        let links = LinksData { generation: 7, symbols: vec!["b".into()], details: vec![None, Some(SnapDetail { links: vec![SnapLink { target: 0, dst: 1, ..Default::default() }], ..Default::default() })] };
+        let links = LinksData {
+            generation: 7,
+            symbols: vec!["b".into()],
+            details: vec![None, Some(SnapDetail { links: vec![SnapLink { target: 0, dst: 1, ..Default::default() }], ..Default::default() })],
+        };
         save(d.path(), &data, &links).unwrap();
         let m = MappedSnapshot::open(&d.path().join("snapshot.rkyv")).unwrap();
         assert_eq!(m.archived().entries.len(), 2);

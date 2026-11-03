@@ -2,12 +2,12 @@
 //! graph metrics and persistence. Everything here runs off the UI thread.
 
 use crate::state::{FileUpdate, State};
-use crate::{ms, ChangeEvent, Engine, Inner, Result};
+use crate::{ChangeEvent, Engine, Inner, Result, ms};
 use crossbeam_channel::{Receiver, RecvTimeoutError};
 use rayon::prelude::*;
 use std::collections::HashSet;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use vault_fs::{FileKind, WatchEvent};
 
@@ -48,17 +48,17 @@ pub fn run(engine: Engine, mapped: Option<vault_store::MappedSnapshot>, links: O
         tracing::info!(rss_mb = crate::rss_mb(), "file table");
         rebuild_switcher(inner);
         let mut ok = false;
-        if let Some(mut l) = links {
-            if let Ok(a) = l.archived() {
-                let mut st = std::mem::take(&mut *inner.state.lock());
-                if a.generation.to_native() == st.generation {
-                    crate::persist::attach_links(&mut st, a);
-                    ok = true;
-                }
-                let mut g = inner.state.lock();
-                *g = st;
-                publish(inner, &g);
+        if let Some(mut l) = links
+            && let Ok(a) = l.archived()
+        {
+            let mut st = std::mem::take(&mut *inner.state.lock());
+            if a.generation.to_native() == st.generation {
+                crate::persist::attach_links(&mut st, a);
+                ok = true;
             }
+            let mut g = inner.state.lock();
+            *g = st;
+            publish(inner, &g);
         }
         if !ok {
             tracing::info!("links file missing or stale; reparsing notes");
@@ -201,7 +201,10 @@ pub fn run(engine: Engine, mapped: Option<vault_store::MappedSnapshot>, links: O
         // Commit policy: an isolated change commits after a 30 ms quiet window; a burst of changes
         // commits at most every `commit_interval` (~250 ms) so typing never floods tantivy.
         let quiet = inner.last_change.lock().elapsed();
-        if inner.pending_commit.load(Ordering::SeqCst) && (last_commit.elapsed() >= inner.opts.commit_interval || (quiet >= Duration::from_millis(30) && last_commit.elapsed() >= Duration::from_millis(60))) {
+        if inner.pending_commit.load(Ordering::SeqCst)
+            && (last_commit.elapsed() >= inner.opts.commit_interval
+                || (quiet >= Duration::from_millis(30) && last_commit.elapsed() >= Duration::from_millis(60)))
+        {
             inner.pending_commit.store(false, Ordering::SeqCst);
             let t = Instant::now();
             if let Err(e) = inner.text.commit() {
@@ -232,10 +235,12 @@ fn background(engine: Engine) {
         if inner.dirty_graph.load(Ordering::SeqCst) && inner.embed_pending.load(Ordering::SeqCst) == 0 {
             compute_graph(&engine);
         }
-        if inner.dirty_persist.load(Ordering::SeqCst) && inner.embed_pending.load(Ordering::SeqCst) == 0 && inner.last_change.lock().elapsed() >= inner.opts.idle {
-            if let Err(e) = persist(&engine) {
-                tracing::warn!(error = %e, "persist failed");
-            }
+        if inner.dirty_persist.load(Ordering::SeqCst)
+            && inner.embed_pending.load(Ordering::SeqCst) == 0
+            && inner.last_change.lock().elapsed() >= inner.opts.idle
+            && let Err(e) = persist(&engine)
+        {
+            tracing::warn!(error = %e, "persist failed");
         }
     }
 }
@@ -310,7 +315,12 @@ fn sync_with_disk(engine: &Engine, files: Vec<vault_fs::WalkedFile>, dirs: Vec<S
         reparsed += updates.iter().filter(|u| u.parsed.is_some()).count();
         let t = Instant::now();
         let rm = if first { removed.clone() } else { Vec::new() };
-        let ((), parsed) = rayon::join(|| { apply(engine, updates, rm, false); }, || batches.get(i + 1).map(|b| read_and_parse(inner, b, false)));
+        let ((), parsed) = rayon::join(
+            || {
+                apply(engine, updates, rm, false);
+            },
+            || batches.get(i + 1).map(|b| read_and_parse(inner, b, false)),
+        );
         next = parsed;
         tracing::info!(files = batches[i].len(), ms = ms(t), "index batch");
         first = false;
@@ -487,10 +497,8 @@ pub(crate) fn publish(inner: &Inner, st: &State) {
 pub(crate) fn rebuild_switcher(inner: &Inner) {
     let snap = inner.snap.load_full();
     let now = crate::now_ms();
-    let items: Vec<vault_search::SwitchItem> = snap
-        .notes()
-        .map(|e| vault_search::SwitchItem { id: e.id, title: e.title.clone(), aliases: e.aliases.clone(), path: e.path.clone() })
-        .collect();
+    let items: Vec<vault_search::SwitchItem> =
+        snap.notes().map(|e| vault_search::SwitchItem { id: e.id, title: e.title.clone(), aliases: e.aliases.clone(), path: e.path.clone() }).collect();
     let s2 = snap.clone();
     let s3 = snap.clone();
     let sw = vault_search::Switcher::new(items, move |id| s2.frecency_norm(id, now), move |id| s3.pagerank_norm(id));
@@ -686,7 +694,17 @@ pub fn embed_worker(engine: Engine, rx: Receiver<u32>) {
                 hashes.insert(*id, chunks.iter().map(|c| c.hash).collect());
                 store.chunks.push((
                     *id,
-                    chunks.iter().map(|c| vault_store::ChunkRec { file_id: *id, start: c.start, end: c.end, heading_path: c.heading_path.clone(), model: emb.name().to_string(), xxh3: c.hash }).collect(),
+                    chunks
+                        .iter()
+                        .map(|c| vault_store::ChunkRec {
+                            file_id: *id,
+                            start: c.start,
+                            end: c.end,
+                            heading_path: c.heading_path.clone(),
+                            model: emb.name().to_string(),
+                            xxh3: c.hash,
+                        })
+                        .collect(),
                 ));
             }
             inner.store_write(store);

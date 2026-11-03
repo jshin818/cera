@@ -29,9 +29,9 @@ impl ObsidianConfig {
     }
 
     pub fn is_user_ignored(&self, rel: &str) -> bool {
-        self.ignore_filters.iter().any(|f| {
-            !f.is_empty() && (rel == f || rel.starts_with(&format!("{f}/")) || (!f.contains('/') && rel.split('/').any(|seg| seg == f)))
-        })
+        self.ignore_filters
+            .iter()
+            .any(|f| !f.is_empty() && (rel == f || rel.starts_with(&format!("{f}/")) || (!f.contains('/') && rel.split('/').any(|seg| seg == f))))
     }
 
     /// Folder (normalized, may be "") where a new attachment pasted into `note_rel` should go.
@@ -57,11 +57,7 @@ mod tests {
     fn reads_app_json() {
         let d = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(d.path().join(".obsidian")).unwrap();
-        std::fs::write(
-            d.path().join(".obsidian/app.json"),
-            r#"{"userIgnoreFilters":["Archive/","templates"],"attachmentFolderPath":"./assets"}"#,
-        )
-        .unwrap();
+        std::fs::write(d.path().join(".obsidian/app.json"), r#"{"userIgnoreFilters":["Archive/","templates"],"attachmentFolderPath":"./assets"}"#).unwrap();
         let c = ObsidianConfig::load(d.path());
         assert!(c.is_user_ignored("Archive/old.md"));
         assert!(c.is_user_ignored("x/templates/t.md"));

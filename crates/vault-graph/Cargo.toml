@@ -10,3 +10,6 @@ aho-corasick.workspace = true
 rayon.workspace = true
 xxhash-rust.workspace = true
 serde.workspace = true
+
+[lints]
+workspace = true

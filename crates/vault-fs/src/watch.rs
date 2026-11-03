@@ -1,10 +1,10 @@
 //! Debounced watcher (FSEvents on macOS, inotify on Linux). Installed before the startup walk
 //! finishes; consumers dedupe by path + hash. Rescan flags are surfaced as `WatchEvent::Rescan`.
 
-use crate::{normalize, ObsidianConfig};
+use crate::{ObsidianConfig, normalize};
 use crossbeam_channel::{Receiver, Sender};
 use notify_debouncer_full::notify::{self, EventKind, RecursiveMode};
-use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
+use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -90,10 +90,10 @@ mod tests {
         std::fs::write(d.path().join("n.md"), "x").unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while std::time::Instant::now() < deadline {
-            if let Ok(WatchEvent::Changed(v)) = w.events.recv_timeout(Duration::from_millis(200)) {
-                if v.iter().any(|p| p == "n.md") {
-                    return;
-                }
+            if let Ok(WatchEvent::Changed(v)) = w.events.recv_timeout(Duration::from_millis(200))
+                && v.iter().any(|p| p == "n.md")
+            {
+                return;
             }
         }
         panic!("no event for n.md");

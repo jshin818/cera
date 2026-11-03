@@ -63,7 +63,8 @@ impl Switcher {
             })
             .collect();
         let pagerank_part: Vec<f32> = entries.iter().map(|e| 0.2 * pagerank_norm(e.id)).collect();
-        let boost = entries.iter().zip(&pagerank_part).map(|(e, p)| std::sync::atomic::AtomicU32::new((1.0 + 0.5 * frecency_norm(e.id) + p).to_bits())).collect();
+        let boost =
+            entries.iter().zip(&pagerank_part).map(|(e, p)| std::sync::atomic::AtomicU32::new((1.0 + 0.5 * frecency_norm(e.id) + p).to_bits())).collect();
         let titles_lower = entries.iter().map(|e| e.title_lower.clone()).collect();
         let by_id = entries.iter().enumerate().map(|(i, e)| (e.id, i)).collect();
         Switcher { entries, boost, pagerank_part, by_id, titles_lower, last: parking_lot::Mutex::new(None) }
@@ -140,16 +141,16 @@ impl Switcher {
                             }
                         }
                     }
-                    if best.is_none() {
-                        if let Some(s) = pattern.score(e.path.slice(..), &mut m) {
-                            best = Some((s / 2, None));
-                        }
+                    if best.is_none()
+                        && let Some(s) = pattern.score(e.path.slice(..), &mut m)
+                    {
+                        best = Some((s / 2, None));
                     }
                     // An exact alias match beats a fuzzy title match on the same note.
-                    if e.title_lower != ql {
-                        if let Some((_, a)) = e.aliases.iter().find(|(_, a)| a.to_lowercase() == ql) {
-                            best = Some((best.map(|b| b.0).unwrap_or(0), Some(a.as_str())));
-                        }
+                    if e.title_lower != ql
+                        && let Some((_, a)) = e.aliases.iter().find(|(_, a)| a.to_lowercase() == ql)
+                    {
+                        best = Some((best.map(|b| b.0).unwrap_or(0), Some(a.as_str())));
                     }
                     if let Some((s, alias)) = best {
                         let mut score = s as f32 * self.boost(idx);
@@ -224,7 +225,12 @@ mod tests {
         ["Rust ownership", "Rusty nail", "Meeting notes", "Recipes/Ramen", "rust"]
             .iter()
             .enumerate()
-            .map(|(i, t)| SwitchItem { id: i as u32, title: t.rsplit('/').next().unwrap().to_string(), aliases: if i == 2 { vec!["standup".into()] } else { vec![] }, path: format!("{t}.md") })
+            .map(|(i, t)| SwitchItem {
+                id: i as u32,
+                title: t.rsplit('/').next().unwrap().to_string(),
+                aliases: if i == 2 { vec!["standup".into()] } else { vec![] },
+                path: format!("{t}.md"),
+            })
             .collect()
     }
 

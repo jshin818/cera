@@ -1,10 +1,10 @@
-use crate::{normalize, words, Embedder, DIMS};
+use crate::{DIMS, Embedder, normalize, words};
 
 const STOP: &[&str] = &[
-    "a", "an", "the", "and", "or", "but", "if", "of", "to", "in", "on", "for", "with", "at", "by", "from", "is", "are", "was", "were", "be", "been",
-    "it", "its", "this", "that", "these", "those", "as", "not", "no", "so", "do", "does", "did", "i", "you", "we", "they", "he", "she", "my", "our",
-    "your", "their", "can", "will", "would", "should", "could", "has", "have", "had", "about", "into", "than", "then", "there", "here", "what",
-    "which", "who", "how", "when", "where", "why", "also", "just", "more", "most", "some", "any", "all", "each", "very",
+    "a", "an", "the", "and", "or", "but", "if", "of", "to", "in", "on", "for", "with", "at", "by", "from", "is", "are", "was", "were", "be", "been", "it",
+    "its", "this", "that", "these", "those", "as", "not", "no", "so", "do", "does", "did", "i", "you", "we", "they", "he", "she", "my", "our", "your", "their",
+    "can", "will", "would", "should", "could", "has", "have", "had", "about", "into", "than", "then", "there", "here", "what", "which", "who", "how", "when",
+    "where", "why", "also", "just", "more", "most", "some", "any", "all", "each", "very",
 ];
 
 /// Signed feature hashing: unigrams (1.0), bigrams (0.5), character trigrams of longer words

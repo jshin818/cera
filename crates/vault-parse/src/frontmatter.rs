@@ -39,11 +39,9 @@ pub fn string_list(v: Option<&serde_json::Value>, split_spaces: bool) -> Vec<Str
             })
             .filter(|s| !s.is_empty())
             .collect(),
-        Some(serde_json::Value::String(s)) => s
-            .split(|c: char| c == ',' || (split_spaces && c.is_whitespace()))
-            .map(|x| x.trim().to_string())
-            .filter(|x| !x.is_empty())
-            .collect(),
+        Some(serde_json::Value::String(s)) => {
+            s.split(|c: char| c == ',' || (split_spaces && c.is_whitespace())).map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()
+        }
         _ => Vec::new(),
     }
 }

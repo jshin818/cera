@@ -197,11 +197,12 @@ function buildDecorations(state, opts) {
     add(titleLine.from, Math.min(doc.length, titleLine.to + 1), Decoration.replace({ block: true }));
   }
   let skipUntil = -1;
+  let skipFrom = -1;
   syntaxTree(state).iterate({
     enter(node) {
       const { from, to, name } = node;
       if (fm && from < fm.to) return name === 'Document';
-      if (from < skipUntil) return false;
+      if (to <= skipUntil && from >= skipFrom) return false;
       if (t && from >= titleLine.from && to <= titleLine.to && !active.has(titleLine.number) && /^#\s/.test(titleLine.text) && titleLine.text.replace(/^#\s+/, '').trim() === t) return false;
       const act = lineActive(from);
       switch (name) {
@@ -251,9 +252,11 @@ function buildDecorations(state, opts) {
             const at = firstLine.from + firstLine.text.indexOf('[!');
             const endMarker = firstLine.text.indexOf(']', at - firstLine.from) + firstLine.from + 1;
             const label = cm[2] || cm[1][0].toUpperCase() + cm[1].slice(1);
-            add(at, firstLine.to, Decoration.replace({ widget: new LabelWidget(label) }));
+            add(firstLine.from, firstLine.to, Decoration.replace({ widget: new LabelWidget(label) }));
+            void at;
             void endMarker;
             skipUntil = firstLine.to;
+            skipFrom = firstLine.from;
           }
           break;
         }

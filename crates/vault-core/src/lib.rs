@@ -14,7 +14,7 @@ mod persist;
 mod query;
 mod state;
 
-pub use ops::{first_frame, safe_name, NoteView, SaveOutcome};
+pub use ops::{NoteView, SaveOutcome, first_frame, safe_name};
 pub use query::*;
 pub use state::{Entry, OutLink, Snapshot};
 pub use vault_parse::Subpath;
@@ -23,8 +23,8 @@ use arc_swap::{ArcSwap, ArcSwapOption};
 use parking_lot::{Condvar, Mutex, RwLock};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, thiserror::Error)]

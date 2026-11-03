@@ -101,10 +101,10 @@ impl LinkResolver {
         let lower = t.to_lowercase();
         // Fast path: a bare name (the common [[Note]] case) is a name or alias lookup.
         if !lower.contains('/') && !lower.starts_with('.') {
-            if let Some(c) = self.by_name.get(&lower).or_else(|| self.by_name.get(strip_md(&lower))) {
-                if let Some(&(id, _)) = c.first() {
-                    return Resolved::File(id);
-                }
+            if let Some(c) = self.by_name.get(&lower).or_else(|| self.by_name.get(strip_md(&lower)))
+                && let Some(&(id, _)) = c.first()
+            {
+                return Resolved::File(id);
             }
             if let Some(&id) = self.by_path.get(&lower) {
                 return Resolved::File(id);
@@ -139,15 +139,15 @@ impl LinkResolver {
             }
             return Resolved::Unresolved;
         }
-        if let Some(c) = self.by_name.get(&lower).or_else(|| self.by_name.get(strip_md(&lower))) {
-            if let Some(&(id, _)) = c.first() {
-                return Resolved::File(id);
-            }
+        if let Some(c) = self.by_name.get(&lower).or_else(|| self.by_name.get(strip_md(&lower)))
+            && let Some(&(id, _)) = c.first()
+        {
+            return Resolved::File(id);
         }
-        if let Some(c) = self.by_alias.get(&lower) {
-            if let Some(&(id, _)) = c.first() {
-                return Resolved::File(id);
-            }
+        if let Some(c) = self.by_alias.get(&lower)
+            && let Some(&(id, _)) = c.first()
+        {
+            return Resolved::File(id);
         }
         Resolved::Unresolved
     }

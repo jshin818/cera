@@ -66,7 +66,7 @@ pub fn best_available(models_dir: Option<&std::path::Path>) -> Box<dyn Embedder>
             }
         }
     }
-    Box::new(HashEmbedder::default())
+    Box::new(HashEmbedder)
 }
 
 /// Tokens for the hashed embedder and keyword stats: lowercase words.

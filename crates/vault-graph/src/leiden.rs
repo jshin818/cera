@@ -238,7 +238,7 @@ mod tests {
         let g = Graph::new(18, &e);
         let c = leiden(&g, 1.0, 10);
         let k = *c.iter().max().unwrap() as usize + 1;
-        assert!(k >= 2 && k <= 6, "{k}");
+        assert!((2..=6).contains(&k), "{k}");
         // each community connected
         for cid in 0..k as u32 {
             let nodes: Vec<u32> = (0..18).filter(|&v| c[v as usize] == cid).collect();

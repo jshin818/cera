@@ -68,3 +68,10 @@ debug = "line-tables-only"
 
 [profile.bench]
 inherits = "release"
+
+[workspace.lints.clippy]
+# Index loops over parallel arrays read more clearly than zipped iterators in the numeric code.
+needless_range_loop = "allow"
+type_complexity = "allow"
+unnecessary_sort_by = "allow"
+doc_lazy_continuation = "allow"

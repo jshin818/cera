@@ -4,8 +4,8 @@
 use crate::{Engine, Result};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use vault_search::rrf;
 
 #[derive(Debug, Clone, Serialize)]
@@ -180,7 +180,11 @@ impl Engine {
     pub fn unresolved(&self) -> Vec<(String, Vec<NoteRef>)> {
         let snap = self.snapshot();
         let st = self.0.state.lock();
-        let mut v: Vec<(String, Vec<NoteRef>)> = st.unresolved.iter().map(|(t, srcs)| (st.syms.get(*t).to_string(), srcs.iter().filter_map(|&s| snap.get(s).map(|e| note_ref(e))).collect())).collect();
+        let mut v: Vec<(String, Vec<NoteRef>)> = st
+            .unresolved
+            .iter()
+            .map(|(t, srcs)| (st.syms.get(*t).to_string(), srcs.iter().filter_map(|&s| snap.get(s).map(|e| note_ref(e))).collect()))
+            .collect();
         v.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.cmp(&b.0)));
         v
     }
@@ -189,10 +193,7 @@ impl Engine {
     pub fn switch(&self, q: &str, limit: usize) -> Vec<SwitchResult> {
         let Some(sw) = self.0.switcher.load_full() else { return Vec::new() };
         let snap = self.snapshot();
-        sw.query(q, limit)
-            .into_iter()
-            .filter_map(|h| snap.get(h.id).map(|e| SwitchResult { note: note_ref(e), alias: h.alias, typo: h.typo }))
-            .collect()
+        sw.query(q, limit).into_iter().filter_map(|h| snap.get(h.id).map(|e| SwitchResult { note: note_ref(e), alias: h.alias, typo: h.typo })).collect()
     }
 
     /// Full-text only (BM25F).
@@ -255,7 +256,10 @@ impl Engine {
             .filter_map(|(id, s)| {
                 let e = snap.get(id)?;
                 let score = s * (1.0 + 0.3 * snap.frecency_norm(id, now) + 0.2 * snap.pagerank_norm(id));
-                let section = sections.get(&id).and_then(|&c| self.0.store().chunks_of(id).ok().and_then(|cs| cs.get(c as usize).map(|x| x.heading_path.clone()))).filter(|s| !s.is_empty());
+                let section = sections
+                    .get(&id)
+                    .and_then(|&c| self.0.store().chunks_of(id).ok().and_then(|cs| cs.get(c as usize).map(|x| x.heading_path.clone())))
+                    .filter(|s| !s.is_empty());
                 Some(SearchResult {
                     note: note_ref(e),
                     score,
@@ -272,14 +276,14 @@ impl Engine {
         out.truncate(limit);
         // Fill snippets for vector-only hits from their best chunk.
         for r in out.iter_mut().filter(|r| r.snippet.is_empty()) {
-            if let (Some(&c), Some(src)) = (sections.get(&r.note.id), self.read_src(&r.note.path)) {
-                if let Some(ch) = self.0.store().chunks_of(r.note.id).ok().and_then(|cs| cs.get(c as usize).cloned()) {
-                    let s = (ch.start as usize).min(src.len());
-                    let e = (ch.end as usize).min(src.len());
-                    let s = (s..=e).find(|i| src.is_char_boundary(*i)).unwrap_or(e);
-                    let txt: String = src[s..e].split_whitespace().collect::<Vec<_>>().join(" ").chars().take(160).collect();
-                    r.snippet = html_escape(&txt);
-                }
+            if let (Some(&c), Some(src)) = (sections.get(&r.note.id), self.read_src(&r.note.path))
+                && let Some(ch) = self.0.store().chunks_of(r.note.id).ok().and_then(|cs| cs.get(c as usize).cloned())
+            {
+                let s = (ch.start as usize).min(src.len());
+                let e = (ch.end as usize).min(src.len());
+                let s = (s..=e).find(|i| src.is_char_boundary(*i)).unwrap_or(e);
+                let txt: String = src[s..e].split_whitespace().collect::<Vec<_>>().join(" ").chars().take(160).collect();
+                r.snippet = html_escape(&txt);
             }
         }
         Ok(out)
@@ -349,7 +353,14 @@ impl Engine {
             .find(&text, e.id, &skip)
             .into_iter()
             .filter(|m| !linked.contains(&m.target) && seen.insert(m.target))
-            .filter_map(|m| snap.get(m.target).map(|t| Context { note: note_ref(t), start: m.start, end: m.end, line: line_around(&text, m.start as usize, m.end as usize) }))
+            .filter_map(|m| {
+                snap.get(m.target).map(|t| Context {
+                    note: note_ref(t),
+                    start: m.start,
+                    end: m.end,
+                    line: line_around(&text, m.start as usize, m.end as usize),
+                })
+            })
             .collect())
     }
 
@@ -359,10 +370,11 @@ impl Engine {
         let snap = self.snapshot();
         let e = snap.by_path(path).ok_or_else(|| crate::CoreError::NotFound(path.into()))?.clone();
         let vgen = self.0.vector_gen.load(Ordering::SeqCst);
-        if let Some((g, vg, r)) = self.0.related_cache.lock().get(&e.id) {
-            if *g == snap.generation && *vg == vgen {
-                return Ok(r.iter().take(k).cloned().collect());
-            }
+        if let Some((g, vg, r)) = self.0.related_cache.lock().get(&e.id)
+            && *g == snap.generation
+            && *vg == vgen
+        {
+            return Ok(r.iter().take(k).cloned().collect());
         }
         let (vec_ids, ppr_ids) = rayon::join(
             || {
@@ -416,11 +428,11 @@ impl Engine {
                     if snap.get(n).is_none_or(|x| !x.markdown) || n == f {
                         continue;
                     }
-                    if !local.contains_key(&n) {
+                    if let std::collections::hash_map::Entry::Vacant(e) = local.entry(n) {
                         if ids.len() >= max_nodes {
                             continue;
                         }
-                        local.insert(n, ids.len() as u32);
+                        e.insert(ids.len() as u32);
                         ids.push(n);
                         next.push(n);
                     }
@@ -441,7 +453,11 @@ impl Engine {
         let aa: Vec<u32> = vault_graph::adamic_adar(&g, local[&e.id], 50).into_iter().map(|(n, _)| ids[n as usize]).filter(|id| !linked.contains(id)).collect();
         let cos: Vec<u32> = {
             let v = self.0.vectors.read();
-            v.file_vector(e.id).map(|q| v.search_files(&q, 50, Some(e.id)).into_iter().filter(|h| h.score > 0.25).map(|h| h.file_id).filter(|id| !linked.contains(id)).collect()).unwrap_or_default()
+            v.file_vector(e.id)
+                .map(|q| {
+                    v.search_files(&q, 50, Some(e.id)).into_iter().filter(|h| h.score > 0.25).map(|h| h.file_id).filter(|id| !linked.contains(id)).collect()
+                })
+                .unwrap_or_default()
         };
         let mentioned: HashSet<u32> = self.outgoing_mentions(path)?.into_iter().map(|c| c.note.id).collect();
         let m_list: Vec<u32> = mentioned.iter().copied().collect();
@@ -497,7 +513,15 @@ impl Engine {
                 .collect();
             *cache = Some((vgen ^ snap.generation, cents));
         }
-        let mut out: Vec<(String, f32)> = cache.as_ref().unwrap().1.iter().filter(|(t, _)| !e.tags.contains(t)).map(|(t, c)| (t.clone(), vault_embed::dot(&q, c))).filter(|(_, s)| *s > 0.3).collect();
+        let mut out: Vec<(String, f32)> = cache
+            .as_ref()
+            .unwrap()
+            .1
+            .iter()
+            .filter(|(t, _)| !e.tags.contains(t))
+            .map(|(t, c)| (t.clone(), vault_embed::dot(&q, c)))
+            .filter(|(_, s)| *s > 0.3)
+            .collect();
         out.sort_by(|a, b| b.1.total_cmp(&a.1));
         out.truncate(k);
         Ok(out)
@@ -605,7 +629,11 @@ impl Engine {
             .iter()
             .filter_map(|d| {
                 let rest = d.strip_prefix(&prefix)?;
-                (!rest.is_empty() && !rest.contains('/')).then(|| DirInfo { path: d.clone(), name: rest.to_string(), notes: counts.get(rest).copied().unwrap_or(0) })
+                (!rest.is_empty() && !rest.contains('/')).then(|| DirInfo {
+                    path: d.clone(),
+                    name: rest.to_string(),
+                    notes: counts.get(rest).copied().unwrap_or(0),
+                })
             })
             .collect();
         dirs.sort_by_key(|d| d.name.to_lowercase());
@@ -709,10 +737,11 @@ impl Engine {
             let mut edges = Vec::new();
             for e in &notes {
                 for l in &e.links {
-                    if let Some(d) = l.dst() {
-                        if ids.contains(&d) && d != e.id {
-                            edges.push((e.id.min(d), e.id.max(d)));
-                        }
+                    if let Some(d) = l.dst()
+                        && ids.contains(&d)
+                        && d != e.id
+                    {
+                        edges.push((e.id.min(d), e.id.max(d)));
                     }
                 }
             }
@@ -740,16 +769,25 @@ impl Engine {
         for e in &notes {
             let ca = snap.cluster(e.id).unwrap_or(0);
             for l in &e.links {
-                if let Some(cb) = l.dst().and_then(|d| snap.cluster(d)) {
-                    if ca != cb {
-                        *cedges.entry((ca.min(cb), ca.max(cb))).or_default() += 1;
-                    }
+                if let Some(cb) = l.dst().and_then(|d| snap.cluster(d))
+                    && ca != cb
+                {
+                    *cedges.entry((ca.min(cb), ca.max(cb))).or_default() += 1;
                 }
             }
         }
         let mut nodes: Vec<GraphNode> = agg
             .into_iter()
-            .map(|(c, (x, y, n, _, title, path))| GraphNode { id: c, title: format!("{title} +{}", n.saturating_sub(1)), path, x: x / n as f32, y: y / n as f32, rank: n as f32, cluster: c, degree: n as u32 })
+            .map(|(c, (x, y, n, _, title, path))| GraphNode {
+                id: c,
+                title: format!("{title} +{}", n.saturating_sub(1)),
+                path,
+                x: x / n as f32,
+                y: y / n as f32,
+                rank: n as f32,
+                cluster: c,
+                degree: n as u32,
+            })
             .collect();
         let maxn = nodes.iter().map(|n| n.rank).fold(1.0, f32::max);
         nodes.iter_mut().for_each(|n| n.rank /= maxn);

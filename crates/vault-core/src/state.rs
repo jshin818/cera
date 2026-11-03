@@ -4,9 +4,9 @@
 //! arc-swap and never block. Publishing clones a vector of `Arc<Entry>` pointers (cheap), and
 //! entries are replaced, never mutated.
 
+use crate::intern::{Interner, NONE};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
-use crate::intern::{Interner, NONE};
 use vault_parse::{Chunk, LinkKind, LinkResolver, ParsedNote, Resolved, Subpath};
 use vault_search::{Frecency, IndexDoc};
 
@@ -409,7 +409,8 @@ impl State {
             let (id, is_new) = self.alloc_id(&u.rel);
             self.add_dirs_of(&u.rel);
             let old = self.entries[id as usize].clone();
-            let new_aliases: Vec<String> = u.parsed.as_ref().map(|p| p.aliases.clone()).unwrap_or_else(|| old.as_ref().map(|o| o.aliases.clone()).unwrap_or_default());
+            let new_aliases: Vec<String> =
+                u.parsed.as_ref().map(|p| p.aliases.clone()).unwrap_or_else(|| old.as_ref().map(|o| o.aliases.clone()).unwrap_or_default());
             let aliases_changed = old.as_ref().is_none_or(|o| o.aliases != new_aliases);
             if self.preregistered.remove(&id) {
                 // Name already known to the resolver; only aliases are new information.
@@ -437,7 +438,16 @@ impl State {
                 }
             }
             out.changed_paths.push(u.rel.clone());
-            out.store.files.push((id, Some(vault_store::FileRec { path: u.rel.clone(), size: u.size, mtime_ns: u.mtime_ns, xxh3: u.hash, markdown: vault_fs::FileKind::of(&u.rel) == vault_fs::FileKind::Markdown })));
+            out.store.files.push((
+                id,
+                Some(vault_store::FileRec {
+                    path: u.rel.clone(),
+                    size: u.size,
+                    mtime_ns: u.mtime_ns,
+                    xxh3: u.hash,
+                    markdown: vault_fs::FileKind::of(&u.rel) == vault_fs::FileKind::Markdown,
+                }),
+            ));
             if u.parsed.is_none() {
                 // stat-only (or attachment)
                 let e = match old {
@@ -674,10 +684,10 @@ impl State {
             }
             active[e.id as usize] = true;
             for l in &e.links {
-                if let Some(d) = l.dst() {
-                    if self.entries.get(d as usize).and_then(|x| x.as_ref()).is_some_and(|x| x.markdown) {
-                        edges.push((e.id, d));
-                    }
+                if let Some(d) = l.dst()
+                    && self.entries.get(d as usize).and_then(|x| x.as_ref()).is_some_and(|x| x.markdown)
+                {
+                    edges.push((e.id, d));
                 }
             }
         }

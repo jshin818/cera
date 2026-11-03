@@ -4,7 +4,7 @@
 //! with a per-vector scale (rescoring of the top `rescore` candidates). At 256 dims that is 32 bytes
 //! + 260 bytes per chunk.
 
-use crate::{Result, DIMS};
+use crate::{DIMS, Result};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -299,7 +299,8 @@ mod tests {
     #[test]
     fn finds_nearest_and_persists() {
         let e = HashEmbedder;
-        let texts = ["rust ownership borrowing lifetimes", "ramen broth tonkotsu noodles", "garden tomatoes watering schedule", "rust borrow checker lifetimes errors"];
+        let texts =
+            ["rust ownership borrowing lifetimes", "ramen broth tonkotsu noodles", "garden tomatoes watering schedule", "rust borrow checker lifetimes errors"];
         let v = e.embed(&texts);
         let mut idx = VectorIndex::new(e.name());
         for (i, x) in v.iter().enumerate() {

@@ -5,7 +5,7 @@ mod extract;
 mod frontmatter;
 mod resolve;
 
-pub use chunk::{chunk_note, Chunk};
+pub use chunk::{Chunk, chunk_note};
 pub use extract::{parse, title_from_path};
 pub use resolve::{LinkResolver, Resolved};
 

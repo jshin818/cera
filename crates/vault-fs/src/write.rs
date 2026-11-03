@@ -1,6 +1,6 @@
 //! Atomic writes: write a temp file in the same directory, fsync, then rename over the target.
 
-use crate::{io_err, to_abs, Result};
+use crate::{Result, io_err, to_abs};
 use std::io::Write;
 use std::path::Path;
 

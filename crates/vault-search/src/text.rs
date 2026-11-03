@@ -1,14 +1,14 @@
 //! The tantivy full-text index (BM25F via per-field boosts).
 
-use crate::query::{parse_query, Clause};
 use crate::Result;
+use crate::query::{Clause, parse_query};
 use std::path::Path;
 use tantivy::collector::TopDocs;
 use tantivy::query::{BooleanQuery, BoostQuery, FuzzyTermQuery, Occur, PhraseQuery, Query, TermQuery};
-use tantivy::schema::{Field, IndexRecordOption, Schema, TextFieldIndexing, TextOptions, Value, FAST, INDEXED, STORED, STRING};
+use tantivy::schema::{FAST, Field, INDEXED, IndexRecordOption, STORED, STRING, Schema, TextFieldIndexing, TextOptions, Value};
 use tantivy::snippet::SnippetGenerator;
 use tantivy::tokenizer::{AsciiFoldingFilter, LowerCaser, RemoveLongFilter, SimpleTokenizer, TextAnalyzer};
-use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term};
+use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term, doc};
 
 const TOKENIZER: &str = "vault";
 const SCHEMA_VERSION: &str = "2";
@@ -62,11 +62,11 @@ mod parking {
 fn schema() -> (Schema, Fields) {
     let mut sb = Schema::builder();
     let text = |positions: bool| {
-        TextOptions::default().set_indexing_options(
-            TextFieldIndexing::default()
-                .set_tokenizer(TOKENIZER)
-                .set_index_option(if positions { IndexRecordOption::WithFreqsAndPositions } else { IndexRecordOption::WithFreqs }),
-        )
+        TextOptions::default().set_indexing_options(TextFieldIndexing::default().set_tokenizer(TOKENIZER).set_index_option(if positions {
+            IndexRecordOption::WithFreqsAndPositions
+        } else {
+            IndexRecordOption::WithFreqs
+        }))
     };
     let f = Fields {
         title: sb.add_text_field("title", text(true) | STORED),
@@ -238,7 +238,13 @@ impl TextIndex {
     fn term_query(&self, field: Field, word: &str, boost: f32, fuzzy: bool) -> Box<dyn Query> {
         let term = Term::from_field_text(field, word);
         let n = word.chars().count();
-        let dist = if !fuzzy || n < 4 { 0 } else if n < 8 { 1 } else { 2 };
+        let dist = if !fuzzy || n < 4 {
+            0
+        } else if n < 8 {
+            1
+        } else {
+            2
+        };
         let q: Box<dyn Query> = if dist == 0 {
             Box::new(TermQuery::new(term, IndexRecordOption::WithFreqs))
         } else {
@@ -357,7 +363,15 @@ mod tests {
             (3, "Projects/Search engine.md", "Search engine", vec!["lang/rust", "draft"], "Tantivy gives BM25 and zero copy mmap segments in rust."),
         ];
         for (id, path, title, tags, body) in docs {
-            t.upsert(&IndexDoc { file_id: id, path: path.into(), title: title.into(), tags: tags.into_iter().map(String::from).collect(), body: body.into(), ..Default::default() }).unwrap();
+            t.upsert(&IndexDoc {
+                file_id: id,
+                path: path.into(),
+                title: title.into(),
+                tags: tags.into_iter().map(String::from).collect(),
+                body: body.into(),
+                ..Default::default()
+            })
+            .unwrap();
         }
         t.commit().unwrap();
         t

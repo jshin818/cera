@@ -7,14 +7,14 @@
 
 use axum::body::Body;
 use axum::extract::{Query, State};
-use axum::http::{header, HeaderMap, Request, StatusCode};
+use axum::http::{HeaderMap, Request, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -120,12 +120,7 @@ pub fn router(engine: Engine, token: Option<String>) -> Router {
         .route("/api/events", get(events))
         .route("/file/{*path}", get(file))
         .layer(middleware::from_fn_with_state(state.clone(), auth));
-    Router::new()
-        .merge(api)
-        .route("/", get(index))
-        .route("/{*path}", get(asset))
-        .layer(tower_http::compression::CompressionLayer::new())
-        .with_state(state)
+    Router::new().merge(api).route("/", get(index)).route("/{*path}", get(asset)).layer(tower_http::compression::CompressionLayer::new()).with_state(state)
 }
 
 async fn auth(State(app): State<App>, req: Request<Body>, next: Next) -> Response {
@@ -186,11 +181,12 @@ struct LimitQ {
 
 async fn index(State(app): State<App>, Query(q): Query<std::collections::HashMap<String, String>>) -> Response {
     let Some(f) = Assets::get("index.html") else { return (StatusCode::NOT_FOUND, "UI not built: run `npm run build` in ui/").into_response() };
-    let mut resp = (StatusCode::OK, [(header::CONTENT_TYPE, "text/html; charset=utf-8"), (header::CACHE_CONTROL, "no-store")], f.data.into_owned()).into_response();
-    if let (Some(tok), Some(t)) = (&app.token, q.get("t")) {
-        if **tok == **t {
-            resp.headers_mut().insert(header::SET_COOKIE, format!("vt={tok}; HttpOnly; SameSite=Strict; Path=/").parse().unwrap());
-        }
+    let mut resp =
+        (StatusCode::OK, [(header::CONTENT_TYPE, "text/html; charset=utf-8"), (header::CACHE_CONTROL, "no-store")], f.data.into_owned()).into_response();
+    if let (Some(tok), Some(t)) = (&app.token, q.get("t"))
+        && **tok == **t
+    {
+        resp.headers_mut().insert(header::SET_COOKIE, format!("vt={tok}; HttpOnly; SameSite=Strict; Path=/").parse().unwrap());
     }
     resp
 }
@@ -435,7 +431,8 @@ async fn rescan(State(app): State<App>) -> ApiResult {
 async fn events(State(app): State<App>) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
     use futures_util::StreamExt;
     let rx = app.engine.subscribe();
-    let stream = tokio_stream::wrappers::BroadcastStream::new(rx).filter_map(|m| async move { m.ok().map(|ev| Ok(Event::default().event("change").json_data(ev).unwrap_or_default())) });
+    let stream = tokio_stream::wrappers::BroadcastStream::new(rx)
+        .filter_map(|m| async move { m.ok().map(|ev| Ok(Event::default().event("change").json_data(ev).unwrap_or_default())) });
     Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
 }
 

@@ -40,11 +40,7 @@ pub enum FileKind {
 impl FileKind {
     pub fn of(rel: &str) -> FileKind {
         let lower = rel.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-        if rel.contains('.') && (lower == "md" || lower == "markdown") {
-            FileKind::Markdown
-        } else {
-            FileKind::Attachment
-        }
+        if rel.contains('.') && (lower == "md" || lower == "markdown") { FileKind::Markdown } else { FileKind::Attachment }
     }
 }
 
@@ -91,11 +87,7 @@ pub fn is_ignored_rel(rel: &str, cfg: &ObsidianConfig) -> bool {
 }
 
 pub fn mtime_ns(meta: &std::fs::Metadata) -> i64 {
-    meta.modified()
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_nanos() as i64)
-        .unwrap_or(0)
+    meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_nanos() as i64).unwrap_or(0)
 }
 
 /// Parallel walk of the vault. Hidden directories (`.vault`, `.obsidian`, `.git`, ...) are skipped,
@@ -166,12 +158,7 @@ pub fn walk_dirs(root: &Path, cfg: &ObsidianConfig) -> Vec<String> {
 /// Stat a single vault file. `None` if it no longer exists or is not a regular file.
 pub fn stat(root: &Path, rel: &str) -> Option<WalkedFile> {
     let meta = std::fs::metadata(to_abs(root, rel)).ok()?;
-    meta.is_file().then(|| WalkedFile {
-        rel: rel.to_string(),
-        size: meta.len(),
-        mtime_ns: mtime_ns(&meta),
-        kind: FileKind::of(rel),
-    })
+    meta.is_file().then(|| WalkedFile { rel: rel.to_string(), size: meta.len(), mtime_ns: mtime_ns(&meta), kind: FileKind::of(rel) })
 }
 
 pub fn read(root: &Path, rel: &str) -> Result<Vec<u8>> {

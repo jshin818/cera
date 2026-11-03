@@ -32,7 +32,11 @@ pub fn to_snapshot(st: &State) -> (SnapshotData, LinksData) {
         .map(|e| {
             e.as_ref().filter(|e| e.markdown).map(|e| SnapDetail {
                 headings: Vec::new(),
-                links: e.links.iter().map(|l| SnapLink { target: l.target, sub: l.extra, display: NONE, start: l.start, end: l.end(), dst: l.dst, flags: l.flags }).collect(),
+                links: e
+                    .links
+                    .iter()
+                    .map(|l| SnapLink { target: l.target, sub: l.extra, display: NONE, start: l.start, end: l.end(), dst: l.dst, flags: l.flags })
+                    .collect(),
                 block_ids: Vec::new(),
                 frontmatter_json: String::new(),
             })

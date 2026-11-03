@@ -23,5 +23,12 @@ fn main() {
     }
     let chunk = t.elapsed();
     let n = files.len() as f64;
-    println!("{} files: read {:.1} µs, parse {:.1} µs, minhash {:.1} µs, chunk {:.1} µs per file (single thread)", n, read.as_micros() as f64 / n, parse.as_micros() as f64 / n, minhash.as_micros() as f64 / n, chunk.as_micros() as f64 / n);
+    println!(
+        "{} files: read {:.1} µs, parse {:.1} µs, minhash {:.1} µs, chunk {:.1} µs per file (single thread)",
+        n,
+        read.as_micros() as f64 / n,
+        parse.as_micros() as f64 / n,
+        minhash.as_micros() as f64 / n,
+        chunk.as_micros() as f64 / n
+    );
 }

@@ -43,7 +43,11 @@ fn link_dump(e: &Engine) -> String {
         out.push_str(&format!("{}  (title={}, aliases={:?}, tags={:?})\n", n.path, n.title, n.aliases, n.tags));
         for l in &n.links {
             let dst = l.dst().and_then(|d| s.get(d)).map(|d| d.path.clone()).unwrap_or_else(|| "UNRESOLVED".into());
-            let sub = match l.subpath(&s.syms) { Some(vault_core::Subpath::Heading(h)) => format!("#{h}"), Some(vault_core::Subpath::Block(b)) => format!("#^{b}"), None => String::new() };
+            let sub = match l.subpath(&s.syms) {
+                Some(vault_core::Subpath::Heading(h)) => format!("#{h}"),
+                Some(vault_core::Subpath::Block(b)) => format!("#^{b}"),
+                None => String::new(),
+            };
             out.push_str(&format!("  {}{}{} -> {}\n", if l.embed() { "!" } else { "" }, s.sym(l.target), sub, dst));
         }
         let mut back: Vec<String> = s.backlinks(n.id).iter().filter_map(|b| s.get(*b)).map(|b| b.path.clone()).collect();
@@ -142,12 +146,11 @@ fn watcher_reflects_external_edits_quickly() {
     let mut seen_search = None;
     while Instant::now() < deadline && (seen_backlink.is_none() || seen_search.is_none()) {
         let s = e.snapshot();
-        if seen_backlink.is_none() {
-            if let (Some(h), Some(n)) = (s.by_path("Home.md"), s.by_path("New External.md")) {
-                if s.backlinks(h.id).contains(&n.id) {
-                    seen_backlink = Some(t.elapsed());
-                }
-            }
+        if seen_backlink.is_none()
+            && let (Some(h), Some(n)) = (s.by_path("Home.md"), s.by_path("New External.md"))
+            && s.backlinks(h.id).contains(&n.id)
+        {
+            seen_backlink = Some(t.elapsed());
         }
         if seen_search.is_none() && !e.search_text("zymurgy", 5).unwrap().is_empty() {
             seen_search = Some(t.elapsed());

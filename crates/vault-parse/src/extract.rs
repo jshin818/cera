@@ -26,16 +26,16 @@ pub fn parse(rel: &str, src: &str) -> ParsedNote {
     let (yaml, body_off) = frontmatter::split(src);
     note.body_offset = body_off as u32;
     let mut tags: Vec<String> = Vec::new();
-    if let Some(y) = yaml {
-        if let Some(fm) = frontmatter::parse_yaml(y) {
-            let alias_v = fm.get("aliases").or_else(|| fm.get("alias"));
-            note.aliases = frontmatter::string_list(alias_v, false);
-            let tag_v = fm.get("tags").or_else(|| fm.get("tag"));
-            for t in frontmatter::string_list(tag_v, true) {
-                push_tag(&mut tags, t.trim_start_matches('#'));
-            }
-            note.frontmatter = Some(fm);
+    if let Some(y) = yaml
+        && let Some(fm) = frontmatter::parse_yaml(y)
+    {
+        let alias_v = fm.get("aliases").or_else(|| fm.get("alias"));
+        note.aliases = frontmatter::string_list(alias_v, false);
+        let tag_v = fm.get("tags").or_else(|| fm.get("tag"));
+        for t in frontmatter::string_list(tag_v, true) {
+            push_tag(&mut tags, t.trim_start_matches('#'));
         }
+        note.frontmatter = Some(fm);
     }
     let body = &src[body_off..];
 
@@ -152,12 +152,13 @@ fn percent_decode(s: &str) -> String {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() {
-            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                out.push(v);
-                i += 3;
-                continue;
-            }
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16)
+        {
+            out.push(v);
+            i += 3;
+            continue;
         }
         out.push(b[i]);
         i += 1;
@@ -281,10 +282,7 @@ mod tests {
         assert_eq!(n.headings.len(), 1);
         assert_eq!(n.headings[0].text, "Heading One");
         let targets: Vec<_> = n.links.iter().map(|l| (l.target.as_str(), l.kind)).collect();
-        assert_eq!(
-            targets,
-            vec![("Beta", LinkKind::Link), ("Gamma", LinkKind::Link), ("pic.png", LinkKind::Embed), ("Delta Note.md", LinkKind::Link)]
-        );
+        assert_eq!(targets, vec![("Beta", LinkKind::Link), ("Gamma", LinkKind::Link), ("pic.png", LinkKind::Embed), ("Delta Note.md", LinkKind::Link)]);
         assert_eq!(n.links[1].subpath, Some(Subpath::Heading("Intro".into())));
         assert_eq!(n.links[1].display.as_deref(), Some("the intro"));
         assert_eq!(&src[n.links[0].start as usize..n.links[0].end as usize], "[[Beta]]");

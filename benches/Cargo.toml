@@ -19,3 +19,6 @@ harness = false
 [[bench]]
 name = "switcher"
 harness = false
+
+[lints]
+workspace = true

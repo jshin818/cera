@@ -2,7 +2,6 @@
 
 mod bench;
 
-
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -22,16 +21,37 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// Index (or refresh) a vault and print stats
-    Index { vault: PathBuf, /// Also compute embeddings and graph metrics before exiting
-        #[arg(long)] full: bool },
+    Index {
+        vault: PathBuf,
+        /// Also compute embeddings and graph metrics before exiting
+        #[arg(long)]
+        full: bool,
+    },
     /// Hybrid search (BM25 + vectors + RRF). Use --text for BM25 only
-    Search { vault: PathBuf, query: String, #[arg(long)] text: bool, #[arg(short, long, default_value_t = 10)] limit: usize },
+    Search {
+        vault: PathBuf,
+        query: String,
+        #[arg(long)]
+        text: bool,
+        #[arg(short, long, default_value_t = 10)]
+        limit: usize,
+    },
     /// Quick switcher
-    Switch { vault: PathBuf, query: String, #[arg(short, long, default_value_t = 10)] limit: usize },
+    Switch {
+        vault: PathBuf,
+        query: String,
+        #[arg(short, long, default_value_t = 10)]
+        limit: usize,
+    },
     /// Notes linking to a note (path relative to the vault)
     Backlinks { vault: PathBuf, note: String },
     /// Related notes and link suggestions
-    Related { vault: PathBuf, note: String, #[arg(short, long, default_value_t = 10)] limit: usize },
+    Related {
+        vault: PathBuf,
+        note: String,
+        #[arg(short, long, default_value_t = 10)]
+        limit: usize,
+    },
     /// Unlinked mentions of a note
     Mentions { vault: PathBuf, note: String },
     /// Near-duplicate notes in the vault
@@ -52,10 +72,14 @@ enum Cmd {
     #[command(hide = true)]
     FirstFrame { vault: PathBuf },
     #[command(hide = true)]
-    IdleRss { vault: PathBuf, #[arg(long)] no_embed: bool },
+    IdleRss {
+        vault: PathBuf,
+        #[arg(long)]
+        no_embed: bool,
+    },
 }
 
-fn engine(vault: &PathBuf, embed: bool) -> Result<Engine> {
+fn engine(vault: &std::path::Path, embed: bool) -> Result<Engine> {
     let e = Engine::open(vault, EngineOptions { watch: false, embed, ..Default::default() }).with_context(|| format!("opening {}", vault.display()))?;
     e.wait_ready(Duration::from_secs(600));
     e.flush();
@@ -64,7 +88,10 @@ fn engine(vault: &PathBuf, embed: bool) -> Result<Engine> {
 
 fn main() -> Result<()> {
     let start = Instant::now();
-    tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::try_from_env("VAULT_LOG").unwrap_or_else(|_| "warn".into())).with_writer(std::io::stderr).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_env("VAULT_LOG").unwrap_or_else(|_| "warn".into()))
+        .with_writer(std::io::stderr)
+        .init();
     let cli = Cli::parse();
     let json = cli.json;
     let print = |v: serde_json::Value, text: &dyn Fn(&serde_json::Value)| {
@@ -108,9 +135,15 @@ fn main() -> Result<()> {
             print(serde_json::to_value(&s)?, &|_| {
                 println!("{} notes, {} attachments, {} folders", s.notes, s.attachments, s.folders);
                 let t = &s.timings;
-                println!("open {:.1} ms (snapshot map {:.2} ms), hydrate {:.1} ms, walk {:.1} ms, index {:.1} ms ({} files parsed)", t.open_total_ms, t.snapshot_map_ms, t.hydrate_ms, t.walk_ms, t.index_ms, t.files_reparsed);
+                println!(
+                    "open {:.1} ms (snapshot map {:.2} ms), hydrate {:.1} ms, walk {:.1} ms, index {:.1} ms ({} files parsed)",
+                    t.open_total_ms, t.snapshot_map_ms, t.hydrate_ms, t.walk_ms, t.index_ms, t.files_reparsed
+                );
                 if full {
-                    println!("embedded {} chunks in {:.1} ms with {}; graph metrics {:.1} ms; {} clusters", t.embed_chunks, t.embed_ms, s.model, t.graph_ms, s.clusters);
+                    println!(
+                        "embedded {} chunks in {:.1} ms with {}; graph metrics {:.1} ms; {} clusters",
+                        t.embed_chunks, t.embed_ms, s.model, t.graph_ms, s.clusters
+                    );
                 }
             });
             e.shutdown();

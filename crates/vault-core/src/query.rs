@@ -294,7 +294,7 @@ impl Engine {
             let Some(src) = snap.get(src_id) else { continue };
             let Some(text) = self.read_src(&src.path) else { continue };
             for l in src.links.iter().filter(|l| l.dst() == Some(e.id)) {
-                out.push(Context { note: note_ref(src), start: l.start, end: l.end, line: line_around(&text, l.start as usize, l.end as usize) });
+                out.push(Context { note: note_ref(src), start: l.start, end: l.end(), line: line_around(&text, l.start as usize, l.end() as usize) });
             }
         }
         Ok(out)
@@ -323,7 +323,7 @@ impl Engine {
         for c in cands {
             let Some(src) = snap.get(c) else { continue };
             let Some(text) = self.read_src(&src.path) else { continue };
-            let mut skip: Vec<(u32, u32)> = src.links.iter().map(|l| (l.start, l.end)).collect();
+            let mut skip: Vec<(u32, u32)> = src.links.iter().map(|l| (l.start, l.end())).collect();
             skip.push((0, src_frontmatter_end(&text)));
             for m in idx.find(&text, u32::MAX, &skip) {
                 out.push(Context { note: note_ref(src), start: m.start, end: m.end, line: line_around(&text, m.start as usize, m.end as usize) });
@@ -341,7 +341,7 @@ impl Engine {
         let e = snap.by_path(path).ok_or_else(|| crate::CoreError::NotFound(path.into()))?;
         let idx = crate::indexer::mentions(&self.0);
         let text = self.read_src(path).unwrap_or_default();
-        let mut skip: Vec<(u32, u32)> = e.links.iter().map(|l| (l.start, l.end)).collect();
+        let mut skip: Vec<(u32, u32)> = e.links.iter().map(|l| (l.start, l.end())).collect();
         skip.push((0, src_frontmatter_end(&text)));
         let linked: HashSet<u32> = e.links.iter().filter_map(|l| l.dst()).collect();
         let mut seen = HashSet::new();

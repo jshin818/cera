@@ -14,25 +14,34 @@ pub const F_EMBED: u8 = 1;
 pub const F_HEADING: u8 = 2;
 pub const F_BLOCK: u8 = 4;
 
-/// A link inside a note, 32 bytes with no heap: strings are interned symbols (see [`Interner`]).
+/// A link inside a note: 20 bytes, no heap. Strings are interned symbols (see [`Interner`]);
+/// the rarely-needed subpath and display text share one optional symbol (`sub \x1f display`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OutLink {
     /// Target as written (without subpath or display).
     pub target: u32,
-    /// Lower-cased target: the unresolved-map key.
-    pub lkey: u32,
-    /// Lower-cased last path segment without .md: the name used for re-resolution.
-    pub name: u32,
-    /// Heading or block id, or NONE.
-    pub sub: u32,
-    pub display: u32,
-    pub start: u32,
-    pub end: u32,
     pub dst: u32,
+    pub start: u32,
+    pub extra: u32,
+    pub len: u16,
     pub flags: u8,
 }
 
 impl OutLink {
+    pub fn end(&self) -> u32 {
+        self.start + self.len as u32
+    }
+    fn extra_parts(&self, syms: &Interner) -> (Option<String>, Option<String>) {
+        if self.extra == NONE {
+            return (None, None);
+        }
+        let s = syms.get(self.extra);
+        let (a, b) = s.split_once('\u{1f}').unwrap_or((&s, ""));
+        ((!a.is_empty()).then(|| a.to_string()), (!b.is_empty()).then(|| b.to_string()))
+    }
+    pub fn display(&self, syms: &Interner) -> Option<String> {
+        self.extra_parts(syms).1
+    }
     pub fn dst(&self) -> Option<u32> {
         (self.dst != NONE).then_some(self.dst)
     }
@@ -40,10 +49,11 @@ impl OutLink {
         self.flags & F_EMBED != 0
     }
     pub fn subpath(&self, syms: &Interner) -> Option<Subpath> {
+        let sub = self.extra_parts(syms).0.unwrap_or_default();
         if self.flags & F_HEADING != 0 {
-            Some(Subpath::Heading(syms.get(self.sub).to_string()))
+            Some(Subpath::Heading(sub))
         } else if self.flags & F_BLOCK != 0 {
-            Some(Subpath::Block(syms.get(self.sub).to_string()))
+            Some(Subpath::Block(sub))
         } else {
             None
         }
@@ -61,14 +71,10 @@ pub struct Entry {
     pub title: String,
     pub aliases: Vec<String>,
     pub tags: Vec<String>,
-    pub headings: Vec<(u8, String, u32)>,
     pub links: Vec<OutLink>,
-    pub block_ids: Vec<String>,
     pub word_count: u32,
     pub tasks_open: u32,
     pub tasks_done: u32,
-    /// Frontmatter as compact JSON (parsed on demand).
-    pub frontmatter: Option<Arc<str>>,
     /// Sorted, unique source ids that link or embed this file.
     pub backlinks: Vec<u32>,
 }
@@ -171,9 +177,10 @@ pub struct State {
     pub by_path: Arc<HashMap<String, u32>>,
     pub resolver: LinkResolver,
     /// lowercase link-target name (last path segment, without .md) -> sources using that name
-    pub by_target_name: HashMap<u32, Vec<u32>>,
-    /// lowercase target symbol -> sources (sorted)
+    /// Unresolved link name (lower-cased last segment) symbol -> sources (sorted).
     pub unresolved: HashMap<u32, Vec<u32>>,
+    /// target symbol -> name symbol (lower-cased last path segment without .md), computed lazily.
+    pub name_of: HashMap<u32, u32>,
     pub syms: Arc<Interner>,
     pub dirs: BTreeSet<String>,
     pub frecency: Vec<Frecency>,
@@ -234,27 +241,29 @@ fn insert_sorted(v: &mut Vec<u32>, x: u32) {
 /// Build an interned link from a parsed one.
 pub fn make_link(syms: &Interner, l: &vault_parse::Link) -> OutLink {
     let (sub, mut flags) = match &l.subpath {
-        Some(Subpath::Heading(h)) => (syms.intern(h), F_HEADING),
-        Some(Subpath::Block(b)) => (syms.intern(b), F_BLOCK),
-        None => (NONE, 0),
+        Some(Subpath::Heading(h)) => (h.as_str(), F_HEADING),
+        Some(Subpath::Block(b)) => (b.as_str(), F_BLOCK),
+        None => ("", 0),
     };
     if l.kind == LinkKind::Embed {
         flags |= F_EMBED;
     }
-    OutLink {
-        target: syms.intern(&l.target),
-        lkey: syms.intern(&l.target.to_lowercase()),
-        name: target_name(&l.target).map(|n| syms.intern(&n)).unwrap_or(NONE),
-        sub,
-        display: syms.opt(l.display.as_deref()),
-        start: l.start,
-        end: l.end,
-        dst: NONE,
-        flags,
-    }
+    let display = l.display.as_deref().unwrap_or("");
+    let extra = if sub.is_empty() && display.is_empty() { NONE } else { syms.intern(&format!("{sub}\u{1f}{display}")) };
+    OutLink { target: syms.intern(&l.target), dst: NONE, start: l.start, extra, len: (l.end - l.start).min(u16::MAX as u32) as u16, flags }
 }
 
 impl State {
+    /// Name symbol for a target symbol (lower-cased last segment without .md); NONE for "".
+    pub fn name_sym(&mut self, target: u32) -> u32 {
+        if let Some(&n) = self.name_of.get(&target) {
+            return n;
+        }
+        let n = target_name(&self.syms.get(target)).map(|x| self.syms.intern(&x)).unwrap_or(NONE);
+        self.name_of.insert(target, n);
+        n
+    }
+
     fn alloc_id(&mut self, path: &str) -> (u32, bool) {
         if let Some(&id) = self.by_path.get(path) {
             return (id, false);
@@ -341,6 +350,7 @@ impl State {
         let mut back_rm: HashMap<u32, Vec<u32>> = HashMap::new();
         let mut touched_backlinks: HashSet<u32> = HashSet::new();
         let mut unresolved_dirty: HashSet<u32> = HashSet::new();
+        let mut removed_sources: Vec<u32> = Vec::new();
 
         let drop_outgoing = |st: &mut State, src: u32, links: &[OutLink], back_rm: &mut HashMap<u32, Vec<u32>>, unresolved_dirty: &mut HashSet<u32>| {
             for l in links {
@@ -348,15 +358,11 @@ impl State {
                     Some(d) if d != src => back_rm.entry(d).or_default().push(src),
                     Some(_) => {}
                     None => {
-                        if let Some(v) = st.unresolved.get_mut(&l.lkey) {
+                        let k = st.name_sym(l.target);
+                        if let Some(v) = st.unresolved.get_mut(&k) {
                             remove_sorted(v, src);
-                            unresolved_dirty.insert(l.lkey);
+                            unresolved_dirty.insert(k);
                         }
-                    }
-                }
-                if l.name != NONE {
-                    if let Some(v) = st.by_target_name.get_mut(&l.name) {
-                        remove_sorted(v, src);
                     }
                 }
             }
@@ -386,14 +392,8 @@ impl State {
             }
             out.graph_changed = true;
             out.changed_paths.push(path);
-            // Sources that pointed at it now need re-resolution (handled via affected names).
-            for &s in &old.backlinks {
-                if let Some(Some(se)) = self.entries.get(s as usize) {
-                    for l in se.links.iter().filter(|l| l.dst == id && l.name != NONE) {
-                        affected_names.insert(self.syms.get(l.name).to_string());
-                    }
-                }
-            }
+            // Sources that pointed at it now need re-resolution.
+            removed_sources.extend(old.backlinks.iter().copied());
         }
 
         // 2. upserts (register files first so links between new files resolve)
@@ -445,13 +445,10 @@ impl State {
                         title: vault_parse::title_from_path(&u.rel),
                         aliases: Vec::new(),
                         tags: Vec::new(),
-                        headings: Vec::new(),
                         links: Vec::new(),
-                        block_ids: Vec::new(),
                         word_count: 0,
                         tasks_open: 0,
                         tasks_done: 0,
-                        frontmatter: None,
                         backlinks: Vec::new(),
                     },
                 };
@@ -490,15 +487,14 @@ impl State {
                         title: p.title.clone(),
                         aliases: p.aliases.clone(),
                         tags: p.tags.clone(),
-                        headings: p.headings.iter().map(|h| (h.level, h.text.clone(), h.offset)).collect(),
                         links,
-                        block_ids: p.block_ids.iter().map(|b| b.0.clone()).collect(),
                         word_count: p.word_count,
                         tasks_open: p.tasks.iter().filter(|t| !t.done).count() as u32,
                         tasks_done: p.tasks.iter().filter(|t| t.done).count() as u32,
-                        frontmatter: p.frontmatter.as_ref().map(|f| Arc::from(f.to_string())),
                         backlinks: this.entries[id as usize].as_ref().map(|o| o.backlinks.clone()).unwrap_or_default(),
                     };
+                    let note_headings: Vec<(u8, String, u32)> = p.headings.iter().map(|h| (h.level, h.text.clone(), h.offset)).collect();
+                    let fm_json = p.frontmatter.as_ref().map(|f| f.to_string()).unwrap_or_default();
                     let doc = IndexDoc {
                         file_id: id,
                         path: u.rel.clone(),
@@ -513,8 +509,8 @@ impl State {
                         title: e.title.clone(),
                         aliases: e.aliases.clone(),
                         tags: e.tags.clone(),
-                        frontmatter_json: e.frontmatter.as_deref().unwrap_or_default().to_string(),
-                        headings: e.headings.clone(),
+                        frontmatter_json: fm_json,
+                        headings: note_headings,
                         word_count: e.word_count,
                     };
                     let links = link_records(&e);
@@ -542,10 +538,17 @@ impl State {
         }
 
         // 4. re-resolve sources affected by name changes
-        let mut sources: HashSet<u32> = HashSet::new();
+        // Affected sources: unresolved links using a changed name, plus everything currently linking
+        // to a file with that name (a new file may now be the shorter-path match).
+        let mut sources: HashSet<u32> = removed_sources.into_iter().collect();
         for n in &affected_names {
-            if let Some(s) = self.syms.lookup(n).and_then(|sym| self.by_target_name.get(&sym)) {
+            if let Some(s) = self.syms.lookup(n).and_then(|sym| self.unresolved.get(&sym)) {
                 sources.extend(s.iter().copied());
+            }
+            for f in self.resolver.candidates(n) {
+                if let Some(Some(fe)) = self.entries.get(f as usize) {
+                    sources.extend(fe.backlinks.iter().copied());
+                }
             }
         }
         for src in sources {
@@ -564,9 +567,10 @@ impl State {
                     Some(d) if d != src => back_rm.entry(d).or_default().push(src),
                     Some(_) => {}
                     None => {
-                        if let Some(v) = self.unresolved.get_mut(&l.lkey) {
+                        let k = self.name_sym(l.target);
+                        if let Some(v) = self.unresolved.get_mut(&k) {
                             remove_sorted(v, src);
-                            unresolved_dirty.insert(l.lkey);
+                            unresolved_dirty.insert(k);
                         }
                     }
                 }
@@ -608,12 +612,12 @@ impl State {
                 Some(d) if d != e.id => back_add.entry(d).or_default().push(e.id),
                 Some(_) => {}
                 None => {
-                    insert_sorted(self.unresolved.entry(l.lkey).or_default(), e.id);
-                    unresolved_dirty.insert(l.lkey);
+                    let k = self.name_sym(l.target);
+                    if k != NONE {
+                        insert_sorted(self.unresolved.entry(k).or_default(), e.id);
+                        unresolved_dirty.insert(k);
+                    }
                 }
-            }
-            if l.name != NONE {
-                insert_sorted(self.by_target_name.entry(l.name).or_default(), e.id);
             }
         }
     }

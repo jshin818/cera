@@ -79,6 +79,14 @@ impl LinkResolver {
         }
     }
 
+    /// Files that a bare name (lower-cased, no extension) could resolve to: by file name or alias.
+    pub fn candidates(&self, name: &str) -> Vec<u32> {
+        let mut v: Vec<u32> = self.by_name.get(name).into_iter().flatten().chain(self.by_alias.get(name).into_iter().flatten()).map(|&(id, _)| id).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    }
+
     /// Resolve a link target written in `from_path`. Empty targets (same-note links) resolve to `self_id`.
     pub fn resolve(&self, target: &str, from_path: &str, self_id: u32) -> Resolved {
         let t = target.trim().trim_start_matches("./").trim_start_matches('/');

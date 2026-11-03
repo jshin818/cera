@@ -189,7 +189,7 @@ impl Engine {
             links.sort_by(|a, b| b.start.cmp(&a.start));
             let mut changed = false;
             for l in links {
-                let (s, en) = (l.start as usize, l.end as usize);
+                let (s, en) = (l.start as usize, l.end() as usize);
                 if en > text.len() || !text.is_char_boundary(s) || !text.is_char_boundary(en) {
                     continue;
                 }

@@ -2,6 +2,7 @@
 
 mod bench;
 
+
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -85,11 +86,15 @@ fn main() -> Result<()> {
         Cmd::IdleRss { vault, no_embed } => {
             let e = Engine::open(&vault, EngineOptions { watch: true, embed: !no_embed, ..Default::default() })?;
             e.wait_ready(Duration::from_secs(1800));
+            eprintln!("ready rss {:.0}", vault_core::rss_mb());
             e.wait_embeddings(Duration::from_secs(1800));
             e.flush();
+            eprintln!("embedded rss {:.0}", vault_core::rss_mb());
             e.recompute_graph();
+            eprintln!("graph rss {:.0}", vault_core::rss_mb());
             std::thread::sleep(Duration::from_secs(4));
-            println!("{}", serde_json::json!({"rss_mb": bench::rss_mb()}));
+            let (anon, file) = bench::rss_parts();
+            println!("{}", serde_json::json!({"rss_mb": bench::rss_mb(), "anon_mb": anon, "file_mb": file}));
             std::process::exit(0);
         }
         Cmd::Index { vault, full } => {

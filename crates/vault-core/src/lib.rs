@@ -231,6 +231,7 @@ impl Engine {
     /// Open a vault. Returns after the startup snapshot is mapped and the stores are open
     /// (the critical path); everything that scales with vault size continues on background threads.
     pub fn open(root: &Path, opts: EngineOptions) -> Result<Engine> {
+        tune_allocator();
         let t0 = Instant::now();
         let root = root.canonicalize().map_err(|e| CoreError::NotFound(format!("{}: {e}", root.display())))?;
         if !root.is_dir() {
@@ -453,6 +454,54 @@ impl Engine {
 
 fn engine_weak(inner: &Arc<Inner>) -> std::sync::Weak<Inner> {
     Arc::downgrade(inner)
+}
+
+/// Allocator tuning (once per process). glibc raises its mmap threshold dynamically, which sends
+/// large transient buffers (graph CSR, snapshot encoding) into the main heap where they fragment
+/// and stay resident; pinning it keeps buffers over 256 KB in their own mappings, returned on free.
+/// macOS's allocator already behaves this way for large blocks.
+pub fn tune_allocator() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| unsafe {
+            unsafe extern "C" {
+                fn mallopt(param: i32, value: i32) -> i32;
+            }
+            const M_MMAP_THRESHOLD: i32 = -3;
+            const M_ARENA_MAX: i32 = -8;
+            mallopt(M_MMAP_THRESHOLD, 256 * 1024);
+            mallopt(M_ARENA_MAX, 4);
+        });
+    }
+}
+
+/// Return freed heap pages to the OS after large transient jobs (hydrate, first index, graph
+/// metrics), so idle memory reflects live data rather than allocator high-water marks.
+pub fn release_memory() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    unsafe {
+        unsafe extern "C" {
+            fn malloc_trim(pad: usize) -> i32;
+        }
+        malloc_trim(0);
+    }
+    #[cfg(target_os = "macos")]
+    unsafe {
+        unsafe extern "C" {
+            fn malloc_zone_pressure_relief(zone: *mut std::ffi::c_void, goal: usize) -> usize;
+        }
+        malloc_zone_pressure_relief(std::ptr::null_mut(), 0);
+    }
+}
+
+/// Resident set size in MB (Linux /proc; 0 elsewhere). Diagnostics only.
+pub fn rss_mb() -> f64 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| s.lines().find(|l| l.starts_with("VmRSS:")).and_then(|l| l.split_whitespace().nth(1)?.parse::<f64>().ok()))
+        .map(|kb| kb / 1024.0)
+        .unwrap_or(0.0)
 }
 
 pub(crate) fn ms(t: Instant) -> f64 {

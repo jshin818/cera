@@ -113,7 +113,9 @@ impl Store {
         if let Some(d) = path.parent() {
             std::fs::create_dir_all(d)?;
         }
-        let db = Database::create(path)?;
+        // redb's page cache defaults to 1 GiB; reads are rare here (it is a durable mirror of
+        // in-memory state), so a small cache keeps idle memory low.
+        let db = redb::Builder::new().set_cache_size(16 << 20).create(path)?;
         let w = db.begin_write()?;
         {
             w.open_table(FILES)?;

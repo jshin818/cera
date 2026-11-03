@@ -44,6 +44,8 @@ pub fn run(engine: Engine, mapped: Option<vault_store::MappedSnapshot>, links: O
         }
         drop(m);
         inner.timings.lock().hydrate_core_ms = ms(t);
+        crate::release_memory();
+        tracing::info!(rss_mb = crate::rss_mb(), "file table");
         rebuild_switcher(inner);
         let mut ok = false;
         if let Some(mut l) = links {
@@ -64,6 +66,8 @@ pub fn run(engine: Engine, mapped: Option<vault_store::MappedSnapshot>, links: O
         }
     }
     inner.timings.lock().hydrate_ms = ms(t);
+    crate::release_memory();
+    tracing::info!(rss_mb = crate::rss_mb(), "hydrated");
     if inner.shutdown.load(Ordering::SeqCst) {
         return;
     }
@@ -120,15 +124,17 @@ pub fn run(engine: Engine, mapped: Option<vault_store::MappedSnapshot>, links: O
     if reparsed > 0 || force_reparse {
         rebuild_switcher(inner);
     }
+    // Queue the embedding catch-up before signalling readiness so waiters see the pending work.
+    if inner.opts.embed {
+        enqueue_missing_embeddings(inner);
+    }
+    crate::release_memory();
+    tracing::info!(rss_mb = crate::rss_mb(), "ready");
     inner.indexing.store(false, Ordering::SeqCst);
     {
         let (m, cv) = &inner.ready;
         *m.lock() = true;
         cv.notify_all();
-    }
-    // Embedding catch-up for notes without vectors (after the text index: never competes with it).
-    if inner.opts.embed {
-        enqueue_missing_embeddings(inner);
     }
     inner.dirty_graph.store(true, Ordering::SeqCst);
     inner.dirty_titles.store(true, Ordering::SeqCst);
@@ -518,6 +524,8 @@ pub(crate) fn compute_graph(engine: &Engine) {
         inner.dirty_graph.store(true, Ordering::SeqCst);
     }
     inner.timings.lock().graph_ms = ms(t);
+    crate::release_memory();
+    tracing::info!(rss_mb = crate::rss_mb(), ms = ms(t), "graph metrics");
 }
 
 pub(crate) fn persist(engine: &Engine) -> Result<()> {
@@ -526,8 +534,10 @@ pub(crate) fn persist(engine: &Engine) -> Result<()> {
     inner.dirty_persist.store(false, Ordering::SeqCst);
     let t = Instant::now();
     inner.store_drain(Duration::from_secs(60));
-    let (data, links) = crate::persist::to_snapshot(&inner.state.lock());
-    vault_store::snapshot::save(&inner.app_dir, &data, &links)?;
+    {
+        let (data, links) = crate::persist::to_snapshot(&inner.state.lock());
+        vault_store::snapshot::save(&inner.app_dir, &data, &links)?;
+    } // dropped before release_memory below
     if inner.dirty_vectors.swap(false, Ordering::SeqCst) {
         inner.vectors.write().save(&inner.app_dir.join("vectors").join("index.bin"))?;
     }
@@ -535,6 +545,8 @@ pub(crate) fn persist(engine: &Engine) -> Result<()> {
         let _ = l.save(&inner.app_dir.join("layout.bin"));
     }
     inner.timings.lock().snapshot_save_ms = ms(t);
+    crate::release_memory();
+    tracing::info!(rss_mb = crate::rss_mb(), ms = ms(t), "persisted");
     Ok(())
 }
 
@@ -679,6 +691,8 @@ pub fn embed_worker(engine: Engine, rx: Receiver<u32>) {
             tm.embed_ms = total_ms;
             tm.embed_chunks = total_chunks;
         }
-        inner.embed_pending.fetch_sub(n_ids, Ordering::SeqCst);
+        if inner.embed_pending.fetch_sub(n_ids, Ordering::SeqCst) == n_ids {
+            crate::release_memory();
+        }
     }
 }

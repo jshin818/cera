@@ -4,7 +4,7 @@ use crate::intern::{Interner, NONE};
 use crate::state::{Entry, OutLink, State};
 use std::sync::Arc;
 use vault_search::Frecency;
-use vault_store::{LinksData, SnapDetail, SnapEntry, SnapHeading, SnapLink, SnapshotData};
+use vault_store::{LinksData, SnapDetail, SnapEntry, SnapLink, SnapshotData};
 
 pub fn to_snapshot(st: &State) -> (SnapshotData, LinksData) {
     let entries = st
@@ -31,10 +31,10 @@ pub fn to_snapshot(st: &State) -> (SnapshotData, LinksData) {
         .iter()
         .map(|e| {
             e.as_ref().filter(|e| e.markdown).map(|e| SnapDetail {
-                headings: e.headings.iter().map(|(l, t, o)| SnapHeading { level: *l, text: t.clone(), offset: *o }).collect(),
-                links: e.links.iter().map(|l| SnapLink { target: l.target, sub: l.sub, display: l.display, start: l.start, end: l.end, dst: l.dst, flags: l.flags }).collect(),
-                block_ids: e.block_ids.clone(),
-                frontmatter_json: e.frontmatter.as_deref().unwrap_or_default().to_string(),
+                headings: Vec::new(),
+                links: e.links.iter().map(|l| SnapLink { target: l.target, sub: l.extra, display: NONE, start: l.start, end: l.end(), dst: l.dst, flags: l.flags }).collect(),
+                block_ids: Vec::new(),
+                frontmatter_json: String::new(),
             })
         })
         .collect();
@@ -70,13 +70,10 @@ pub fn hydrate_core(d: SnapshotData) -> State {
                     title: e.title,
                     aliases: e.aliases,
                     tags: e.tags,
-                    headings: Vec::new(),
                     links: Vec::new(),
-                    block_ids: Vec::new(),
                     word_count: e.word_count,
                     tasks_open: e.tasks_open,
                     tasks_done: e.tasks_done,
-                    frontmatter: None,
                     backlinks: Vec::new(),
                 })
             })
@@ -104,7 +101,7 @@ pub fn hydrate_core(d: SnapshotData) -> State {
     st
 }
 
-/// Phase B: attach links, headings and frontmatter straight from the mapped (zero-copy) archive,
+/// Phase B: attach links straight from the mapped (zero-copy) archive,
 /// then derive backlinks, the unresolved map and target-name index.
 pub fn attach_links(st: &mut State, a: &vault_store::snapshot::ArchivedLinksData) {
     use rayon::prelude::*;
@@ -117,56 +114,41 @@ pub fn attach_links(st: &mut State, a: &vault_store::snapshot::ArchivedLinksData
             let e = st.entries[i].as_ref()?;
             let Some(d) = (i < n).then(|| a.details[i].as_ref()).flatten() else { return Some(e.clone()) };
             let mut ne = (**e).clone();
-            ne.headings = d.headings.iter().map(|h| (h.level, h.text.as_str().to_string(), h.offset.to_native())).collect();
             ne.links = d
                 .links
                 .iter()
                 .map(|l| OutLink {
                     target: l.target.to_native(),
-                    lkey: NONE,
-                    name: NONE,
-                    sub: l.sub.to_native(),
-                    display: l.display.to_native(),
-                    start: l.start.to_native(),
-                    end: l.end.to_native(),
                     dst: l.dst.to_native(),
+                    start: l.start.to_native(),
+                    extra: l.sub.to_native(),
+                    len: (l.end.to_native() - l.start.to_native()).min(u16::MAX as u32) as u16,
                     flags: l.flags,
                 })
                 .collect();
-            ne.block_ids = d.block_ids.iter().map(|b| b.as_str().to_string()).collect();
-            ne.frontmatter = (!d.frontmatter_json.is_empty()).then(|| Arc::from(d.frontmatter_json.as_str()));
             Some(Arc::new(ne))
         })
         .collect();
     st.entries = rebuilt;
-    // lkey / name symbols are derived (lower-cased targets), computed once per distinct target.
-    let mut derived: std::collections::HashMap<u32, (u32, u32)> = std::collections::HashMap::new();
     let total = st.entries.len();
     let mut back: Vec<Vec<u32>> = vec![Vec::new(); total];
-    for slot in st.entries.iter_mut() {
-        let Some(e) = slot else { continue };
-        if e.links.is_empty() {
-            continue;
-        }
-        let em = Arc::make_mut(e);
-        for l in em.links.iter_mut() {
-            let (lkey, name) = *derived.entry(l.target).or_insert_with(|| {
-                let t = st.syms.get(l.target);
-                (st.syms.intern(&t.to_lowercase()), crate::state::target_name(&t).map(|x| st.syms.intern(&x)).unwrap_or(NONE))
-            });
-            l.lkey = lkey;
-            l.name = name;
+    let mut unresolved: Vec<(u32, u32)> = Vec::new();
+    for e in st.entries.iter().flatten() {
+        for l in &e.links {
             match l.dst() {
-                Some(d) if d != em.id && (d as usize) < total => back[d as usize].push(em.id),
+                Some(d) if d != e.id && (d as usize) < total => back[d as usize].push(e.id),
                 Some(_) => {}
-                None => st.unresolved.entry(lkey).or_default().push(em.id),
-            }
-            if name != NONE {
-                st.by_target_name.entry(name).or_default().push(em.id);
+                None => unresolved.push((l.target, e.id)),
             }
         }
     }
-    for v in st.unresolved.values_mut().chain(st.by_target_name.values_mut()) {
+    for (t, src) in unresolved {
+        let k = st.name_sym(t);
+        if k != NONE {
+            st.unresolved.entry(k).or_default().push(src);
+        }
+    }
+    for v in st.unresolved.values_mut() {
         v.sort_unstable();
         v.dedup();
     }

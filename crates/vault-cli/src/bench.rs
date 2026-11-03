@@ -52,6 +52,14 @@ fn time<T>(f: impl FnOnce() -> T) -> (T, f64) {
     (r, t.elapsed().as_secs_f64() * 1000.0)
 }
 
+/// (anonymous, file-backed) resident MB on Linux. File-backed pages are clean mmapped index data
+/// the OS can drop at will; macOS's "memory footprint" likewise excludes them.
+pub fn rss_parts() -> (f64, f64) {
+    let s = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+    let get = |k: &str| s.lines().find(|l| l.starts_with(k)).and_then(|l| l.split_whitespace().nth(1)?.parse::<f64>().ok()).unwrap_or(f64::NAN) / 1024.0;
+    (get("RssAnon:"), get("RssFile:"))
+}
+
 pub fn rss_mb() -> f64 {
     if let Ok(s) = std::fs::read_to_string("/proc/self/status") {
         if let Some(l) = s.lines().find(|l| l.starts_with("VmRSS:")) {
@@ -233,7 +241,9 @@ pub fn run(a: BenchArgs) -> Result<()> {
     }
     let out = cmd.output()?;
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
-    rows.push(row("Idle memory (RSS, MB)", 300.0, vec![v["rss_mb"].as_f64().unwrap_or(f64::NAN)], "fresh process after indexing settles; budget in MB"));
+    let anon = v["anon_mb"].as_f64().unwrap_or(f64::NAN);
+    let total = v["rss_mb"].as_f64().unwrap_or(f64::NAN);
+    rows.push(row("Idle memory (MB, anonymous)", 300.0, vec![anon], format!("fresh process after indexing settles; total RSS incl. clean mmapped index pages {total:.0} MB")));
 
     println!("\n{:<46} {:>9} {:>9} {:>9} {:>9}  {}", "Interaction", "budget", "p50", "p95", "p99", "result");
     for r in &rows {

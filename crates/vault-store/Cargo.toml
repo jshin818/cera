@@ -1,0 +1,19 @@
+[package]
+name = "vault-store"
+description = "redb metadata tables and the rkyv memory-mapped startup snapshot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+redb.workspace = true
+rkyv.workspace = true
+memmap2.workspace = true
+postcard.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+xxhash-rust.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

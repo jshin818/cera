@@ -1,0 +1,18 @@
+[package]
+name = "vault-search"
+description = "Tantivy full-text index, nucleo quick switcher, frecency and reciprocal rank fusion"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tantivy.workspace = true
+nucleo-matcher.workspace = true
+frizbee.workspace = true
+rayon.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

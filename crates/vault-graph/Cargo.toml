@@ -1,0 +1,12 @@
+[package]
+name = "vault-graph"
+description = "Link graph analytics: PageRank, personalized PageRank, Leiden clusters, Adamic-Adar, unlinked mentions, MinHash, force layout"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aho-corasick.workspace = true
+rayon.workspace = true
+xxhash-rust.workspace = true
+serde.workspace = true

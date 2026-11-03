@@ -1,0 +1,19 @@
+[package]
+name = "vault-embed"
+description = "Embedding backends (Model2Vec static models, hashed CPU fallback) and the binary-quantized vector index"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+safetensors.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rayon.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+xxhash-rust.workspace = true
+unicode-segmentation.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

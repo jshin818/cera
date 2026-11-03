@@ -1,0 +1,29 @@
+---
+source: crates/vault-core/tests/engine.rs
+expression: link_dump(&e)
+---
+Archive/Old/Alpha.md  (title=Alpha, aliases=[], tags=[])
+  ../../Projects/Beta.md -> Projects/Beta.md
+  backlinks: ["Gamma.md"]
+Gamma.md  (title=Gamma, aliases=[], tags=[])
+  Old/Alpha -> Archive/Old/Alpha.md
+  Alpha.md -> Projects/Alpha.md
+  backlinks: ["Home.md"]
+Home.md  (title=Home, aliases=["Start", "Index"], tags=["hub"])
+  Alpha -> Projects/Alpha.md
+  Projects/Beta -> Projects/Beta.md
+  Gamma#Plan -> Gamma.md
+  Missing Note -> UNRESOLVED
+  !diagram.png -> assets/diagram.png
+  ada -> People/Ada Lovelace.md
+  Beta#^decision -> Projects/Beta.md
+  backlinks: ["Projects/Alpha.md", "Projects/Beta.md"]
+People/Ada Lovelace.md  (title=Ada Lovelace, aliases=["Ada"], tags=[])
+  backlinks: ["Home.md"]
+Projects/Alpha.md  (title=Alpha, aliases=[], tags=["project/alpha"])
+  Home -> Home.md
+  Index -> Home.md
+  backlinks: ["Gamma.md", "Home.md"]
+Projects/Beta.md  (title=Beta, aliases=[], tags=["project"])
+  home -> Home.md
+  backlinks: ["Archive/Old/Alpha.md", "Home.md"]

@@ -1,0 +1,20 @@
+[package]
+name = "vault-fs"
+description = "Vault walker, watcher, hashing and atomic writes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ignore.workspace = true
+notify-debouncer-full.workspace = true
+xxhash-rust.workspace = true
+crossbeam-channel.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

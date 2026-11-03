@@ -1,0 +1,66 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "tools/gen-vault", "benches"]
+exclude = ["crates/vault-app"]
+default-members = ["crates/*", "tools/gen-vault", "benches"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.85"
+
+[workspace.dependencies]
+vault-fs = { path = "crates/vault-fs" }
+vault-parse = { path = "crates/vault-parse" }
+vault-store = { path = "crates/vault-store" }
+vault-search = { path = "crates/vault-search" }
+vault-embed = { path = "crates/vault-embed" }
+vault-graph = { path = "crates/vault-graph" }
+vault-core = { path = "crates/vault-core" }
+vault-server = { path = "crates/vault-server" }
+
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml_ng = "0.10"
+rayon = "1.12"
+crossbeam-channel = "0.5"
+arc-swap = "1.9"
+parking_lot = "0.12"
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "sync", "time", "net", "signal"] }
+ignore = "0.4"
+notify-debouncer-full = "0.7"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+blake3 = "1.8"
+pulldown-cmark = { version = "0.13", default-features = false }
+redb = "4.4"
+rkyv = "0.8"
+memmap2 = "0.9"
+postcard = { version = "1.1", features = ["use-std"] }
+tantivy = "0.27"
+nucleo-matcher = "0.3"
+frizbee = "0.13"
+aho-corasick = "1.1"
+safetensors = "0.8"
+axum = "0.8"
+tower-http = { version = "0.7", features = ["compression-gzip"] }
+rust-embed = "8.13"
+clap = { version = "4.6", features = ["derive"] }
+tempfile = "3.27"
+rand = "0.9"
+insta = "1.49"
+proptest = "1.12"
+divan = "0.1"
+unicode-segmentation = "1.12"
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+debug = "line-tables-only"
+
+[profile.bench]
+inherits = "release"

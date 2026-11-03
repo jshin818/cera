@@ -1,0 +1,27 @@
+[package]
+name = "vault-core"
+description = "Engine facade: owns indexing, watching, search and discovery; exposes immutable snapshots"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vault-fs.workspace = true
+vault-parse.workspace = true
+vault-store.workspace = true
+vault-search.workspace = true
+vault-embed.workspace = true
+vault-graph.workspace = true
+arc-swap.workspace = true
+crossbeam-channel.workspace = true
+parking_lot.workspace = true
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+insta.workspace = true

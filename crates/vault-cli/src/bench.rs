@@ -150,6 +150,9 @@ pub fn run(a: BenchArgs) -> Result<()> {
         e.wait_embeddings(Duration::from_secs(1800));
     }
     e.flush();
+    // Interactive latencies are measured on a settled engine (background jobs finished).
+    eprintln!("  waiting for background work to settle...");
+    e.wait_idle(Duration::from_secs(600));
     let snap = e.snapshot();
     let paths: Vec<String> = snap.notes().map(|n| n.path.clone()).collect();
     let titles: Vec<String> = snap.notes().map(|n| n.title.clone()).collect();

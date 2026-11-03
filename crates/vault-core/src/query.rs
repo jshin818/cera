@@ -243,7 +243,7 @@ impl Engine {
             vec.retain(|h| snap.get(h.file_id).is_some_and(|e| passes_filters(e, &pq)));
         }
         // Drop weak vector-only matches so unrelated notes don't pad the list.
-        let vec: Vec<_> = vec.into_iter().filter(|h| h.score > 0.15).collect();
+        let vec: Vec<_> = vec.into_iter().filter(|h| h.score > 0.25).collect();
         let t_ids: Vec<u32> = text.iter().map(|h| h.file_id).collect();
         let v_ids: Vec<u32> = vec.iter().map(|h| h.file_id).collect();
         let fused = rrf(&[&t_ids, &v_ids]);

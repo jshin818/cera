@@ -83,6 +83,11 @@ class BulletWidget extends WidgetType {
   eq(o) { return o.ch === this.ch }
   toDOM() { const s = document.createElement('span'); s.className = 'cm-bullet-dot'; s.textContent = this.ch; return s }
 }
+class LabelWidget extends WidgetType {
+  constructor(text) { super(); this.text = text }
+  eq(o) { return o.text === this.text }
+  toDOM() { const s = document.createElement('span'); s.className = 'cm-callout-label'; s.textContent = this.text; return s }
+}
 class HrWidget extends WidgetType {
   eq() { return true }
   toDOM() { const s = document.createElement('span'); s.className = 'cm-hr'; return s }
@@ -183,10 +188,21 @@ function buildDecorations(state, opts) {
     }
   }
 
+  // A leading "# Title" that repeats the note's title (file name) is hidden: the title field above
+  // already shows it. It reappears when the cursor is on that line.
+  const bodyStart = fm ? Math.min(doc.length, fm.to + 1) : 0;
+  const titleLine = doc.lineAt(bodyStart);
+  const t = opts.title?.();
+  if (t && titleLine.text.replace(/^#\s+/, '').trim() === t && /^#\s/.test(titleLine.text) && !active.has(titleLine.number)) {
+    add(titleLine.from, Math.min(doc.length, titleLine.to + 1), Decoration.replace({ block: true }));
+  }
+  let skipUntil = -1;
   syntaxTree(state).iterate({
     enter(node) {
       const { from, to, name } = node;
       if (fm && from < fm.to) return name === 'Document';
+      if (from < skipUntil) return false;
+      if (t && from >= titleLine.from && to <= titleLine.to && !active.has(titleLine.number) && /^#\s/.test(titleLine.text) && titleLine.text.replace(/^#\s+/, '').trim() === t) return false;
       const act = lineActive(from);
       switch (name) {
         case 'ATXHeading1': case 'ATXHeading2': case 'ATXHeading3': case 'ATXHeading4': case 'ATXHeading5': case 'ATXHeading6': {
@@ -227,8 +243,18 @@ function buildDecorations(state, opts) {
         }
         case 'Blockquote': {
           const first = doc.lineAt(from).number, last = doc.lineAt(to).number;
-          const callout = /^>\s*\[!/.test(doc.line(first).text);
-          for (let i = first; i <= last; i++) lineDeco(doc.line(i).from, callout ? 'cm-quote cm-callout' : 'cm-quote');
+          const firstLine = doc.line(first);
+          const cm = /^>\s*\[!([\w-]+)\][+-]?\s*(.*)$/.exec(firstLine.text);
+          for (let i = first; i <= last; i++) lineDeco(doc.line(i).from, cm ? 'cm-quote cm-callout' : 'cm-quote');
+          if (cm && !active.has(first)) {
+            // "> [!note] Title" renders as a small label; the marker reappears when editing the line.
+            const at = firstLine.from + firstLine.text.indexOf('[!');
+            const endMarker = firstLine.text.indexOf(']', at - firstLine.from) + firstLine.from + 1;
+            const label = cm[2] || cm[1][0].toUpperCase() + cm[1].slice(1);
+            add(at, firstLine.to, Decoration.replace({ widget: new LabelWidget(label) }));
+            void endMarker;
+            skipUntil = firstLine.to;
+          }
           break;
         }
         case 'QuoteMark':
@@ -494,7 +520,7 @@ export function createEditor(parent, opts) {
     linkState(target);
     return pending.get(k) || Promise.resolve(resolved.get(k));
   };
-  const decoOpts = { linkState, resolve, excerpt: opts.excerpt };
+  const decoOpts = { linkState, resolve, excerpt: opts.excerpt, title: opts.title };
   const editable = new Compartment();
 
   const state = text => EditorState.create({

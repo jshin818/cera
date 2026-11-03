@@ -7,37 +7,53 @@ const STOP: &[&str] = &[
     "which", "who", "how", "when", "where", "why", "also", "just", "more", "most", "some", "any", "all", "each", "very",
 ];
 
-/// Signed feature hashing: unigrams (1.0), bigrams (0.5), character trigrams of words (0.25),
-/// with sublinear term frequency. Deterministic and fast; the always-on CPU fallback.
+/// Signed feature hashing: unigrams (1.0), bigrams (0.5), character trigrams of longer words
+/// (0.25). Features are hashed straight from bytes (no allocation per feature). Deterministic and
+/// fast; the always-on CPU fallback when no Model2Vec model is installed.
 #[derive(Default)]
 pub struct HashEmbedder;
 
-fn add(v: &mut [f32], feat: &str, w: f32) {
-    let h = xxhash_rust::xxh3::xxh3_64(feat.as_bytes());
+#[inline]
+fn add(v: &mut [f32], h: u64, w: f32) {
     let idx = (h % DIMS as u64) as usize;
-    let sign = if (h >> 63) & 1 == 0 { 1.0 } else { -1.0 };
-    v[idx] += sign * w;
+    v[idx] += if (h >> 63) & 1 == 0 { w } else { -w };
+}
+
+#[inline]
+fn mix(a: u64, b: u64) -> u64 {
+    let x = a.rotate_left(23) ^ b.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    x ^ (x >> 29)
 }
 
 impl HashEmbedder {
     pub fn embed_one(&self, text: &str) -> Vec<f32> {
-        let mut counts: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
-        let toks: Vec<String> = words(text).filter(|w| !STOP.contains(&w.as_str()) && w.chars().count() > 1).collect();
-        for t in &toks {
-            *counts.entry(format!("w:{t}")).or_default() += 1.0;
-            let chars: Vec<char> = format!("<{t}>").chars().collect();
-            if chars.len() > 5 {
-                for tri in chars.windows(3) {
-                    *counts.entry(format!("c:{}", tri.iter().collect::<String>())).or_default() += 0.25;
+        let mut v = vec![0f32; DIMS];
+        let mut buf = String::new();
+        let mut prev: Option<u64> = None;
+        for w in words(text) {
+            if w.chars().count() <= 1 || STOP.contains(&w.as_str()) {
+                continue;
+            }
+            let h = xxhash_rust::xxh3::xxh3_64_with_seed(w.as_bytes(), 1);
+            add(&mut v, h, 1.0);
+            if let Some(p) = prev {
+                add(&mut v, mix(p, h), 0.5);
+            }
+            prev = Some(h);
+            if w.len() > 4 {
+                buf.clear();
+                buf.push('<');
+                buf.push_str(&w);
+                buf.push('>');
+                let b = buf.as_bytes();
+                for tri in b.windows(3) {
+                    add(&mut v, xxhash_rust::xxh3::xxh3_64_with_seed(tri, 3), 0.25);
                 }
             }
         }
-        for pair in toks.windows(2) {
-            *counts.entry(format!("b:{} {}", pair[0], pair[1])).or_default() += 0.5;
-        }
-        let mut v = vec![0f32; DIMS];
-        for (f, c) in counts {
-            add(&mut v, &f, 1.0 + c.ln_1p());
+        // Sublinear dampening of repeated features, then L2 normalisation.
+        for x in v.iter_mut() {
+            *x = x.signum() * x.abs().sqrt();
         }
         normalize(&mut v);
         v

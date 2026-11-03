@@ -387,7 +387,8 @@ async function capture() {
 /* ---------- editor ---------- */
 const excerptCache = new Map();
 const editor = createEditor($('ed'), {
-  onChange: () => { dirty = true; scheduleSave(); writingMode() },
+  title: () => cur?.title,
+  onChange: () => { dirty = true; scheduleSave(); writingMode(); refreshChips() },
   resolve: async target => {
     try { return (await api.resolve(target, cur?.path || '')).path } catch { return null }
   },
@@ -433,6 +434,8 @@ const editor = createEditor($('ed'), {
   },
 });
 
+let lastSuggested = [];
+const refreshChips = debounce(() => renderTags(lastSuggested), 300);
 let saveT;
 function scheduleSave() {
   clearTimeout(saveT);
@@ -622,8 +625,11 @@ function withTags(text, tags) {
 }
 function renderTags(suggested) {
   if (!cur) return;
-  const own = fmTags(splitFrontmatter(editor.text).yaml).map(t => t.toLowerCase());
-  const inline = (cur.tags || []).filter(t => !own.includes(t));
+  const { yaml, body } = splitFrontmatter(editor.text);
+  const own = fmTags(yaml).map(t => t.toLowerCase());
+  // Inline #tags, read from the live text (code blocks and inline code excluded).
+  const prose = body.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
+  const inline = [...new Set([...prose.matchAll(/(?:^|[\s(])#([\p{L}\p{N}_\-/]*[\p{L}_\-/][\p{L}\p{N}_\-/]*)/gu)].map(m => m[1].toLowerCase()))].filter(t => !own.includes(t));
   $('tag-chips').innerHTML =
     own.map(t => `<span class="tag-chip" data-c="${tagColor(t)}"><button data-tag="${esc(t)}">${esc(t)}</button><button data-rm="${esc(t)}" aria-label="Remove tag ${esc(t)}">×</button></span>`).join('') +
     inline.map(t => `<button class="tag-chip" data-c="${tagColor(t)}" data-tag="${esc(t)}" title="Inline tag in the text">${esc(t)}</button>`).join('') +
@@ -712,6 +718,7 @@ async function loadBelow(path) {
     b.closest('.ctx').remove();
   };
   $('below').hidden = $('links-wrap').hidden && $('mentions-wrap').hidden && $('rel-wrap').hidden && $('sug-wrap').hidden;
+  lastSuggested = sug.tags;
   renderTags(sug.tags);
   $('dupe').hidden = !sug.dupes.length;
   if (sug.dupes.length) $('dupe').innerHTML = `Looks almost identical to <button data-path="${esc(sug.dupes[0].path)}">${esc(sug.dupes[0].title)}</button> (${Math.round(sug.dupes[0].jaccard * 100)}% overlap).`;

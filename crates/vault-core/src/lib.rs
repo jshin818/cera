@@ -370,6 +370,24 @@ impl Engine {
         false
     }
 
+    /// Wait until background jobs (embeddings, graph metrics, persistence) have settled.
+    pub fn wait_idle(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            let i = &self.0;
+            let busy = i.embed_pending.load(Ordering::SeqCst) > 0
+                || i.dirty_graph.load(Ordering::SeqCst)
+                || i.dirty_persist.load(Ordering::SeqCst)
+                || i.dirty_titles.load(Ordering::SeqCst)
+                || i.store_pending.load(Ordering::SeqCst) > 0;
+            if self.is_ready() && !busy {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
+    }
+
     /// Wait for pending text-index commits to become visible to search.
     pub fn flush(&self) {
         let (tx, rx) = crossbeam_channel::bounded(1);

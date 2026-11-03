@@ -24,6 +24,10 @@ pub struct SwitchHit {
 
 struct Entry {
     id: u32,
+    /// Character-class bitmask of title + aliases + path (a-z, 0-9, other); all bits set if the
+    /// text has non-ASCII letters (accent folding could match them). A query whose characters are
+    /// not all present cannot match, so the fuzzy scorer is skipped.
+    mask: u64,
     title: Utf32String,
     title_lower: String,
     aliases: Vec<(Utf32String, String)>,
@@ -50,6 +54,7 @@ impl Switcher {
         let entries: Vec<Entry> = items
             .into_par_iter()
             .map(|it| Entry {
+                mask: char_mask(&it.title) | it.aliases.iter().map(|a| char_mask(a)).fold(0, |a, b| a | b) | char_mask(&it.path),
                 id: it.id,
                 title_lower: it.title.to_lowercase(),
                 title: Utf32String::from(it.title.as_str()),
@@ -100,6 +105,8 @@ impl Switcher {
             return v;
         }
         let pattern = Pattern::parse(q, CaseMatching::Ignore, Normalization::Smart);
+        // Prefilter bits: only plain fuzzy queries (negation/anchors change what must be present).
+        let qmask = if q.contains(['!', '^', '$', '\'', '|']) { 0 } else { char_mask(q) & !OTHER };
         let ql = q.to_lowercase();
         let prev = {
             let l = self.last.lock();
@@ -121,6 +128,9 @@ impl Switcher {
                 for &idx in chunk {
                     let idx = idx as usize;
                     let e = &self.entries[idx];
+                    if e.mask & qmask != qmask {
+                        continue;
+                    }
                     let mut best: Option<(u32, Option<&str>)> = pattern.score(e.title.slice(..), &mut m).map(|s| (s, None));
                     for (a32, a) in &e.aliases {
                         if let Some(s) = pattern.score(a32.slice(..), &mut m) {
@@ -187,6 +197,23 @@ impl Switcher {
             hits.push(SwitchHit { id: e.id, score: x.score as f32 * 0.01, alias: None, typo: true });
         }
     }
+}
+
+const OTHER: u64 = 1 << 36;
+
+fn char_mask(s: &str) -> u64 {
+    let mut m = 0u64;
+    for c in s.chars() {
+        match c {
+            'a'..='z' => m |= 1 << (c as u32 - 'a' as u32),
+            'A'..='Z' => m |= 1 << (c as u32 - 'A' as u32),
+            '0'..='9' => m |= 1 << (26 + c as u32 - '0' as u32),
+            c if c.is_whitespace() => {}
+            c if c.is_ascii() => m |= OTHER,
+            _ => return u64::MAX,
+        }
+    }
+    m
 }
 
 #[cfg(test)]

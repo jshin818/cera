@@ -18,11 +18,14 @@ pub struct BenchArgs {
     /// Write results as JSON to this file
     #[arg(long)]
     pub out: Option<PathBuf>,
+    /// Compare p95s with a previous `--out` file; exit non-zero on a >10% regression (CI gate)
+    #[arg(long)]
+    pub baseline: Option<PathBuf>,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Row {
-    name: &'static str,
+    name: String,
     budget_ms: f64,
     p50: f64,
     p95: f64,
@@ -43,7 +46,7 @@ fn pct(v: &mut [f64], p: f64) -> f64 {
 fn row(name: &'static str, budget_ms: f64, mut samples: Vec<f64>, note: impl Into<String>) -> Row {
     let n = samples.len();
     let (p50, p95, p99) = (pct(&mut samples, 0.5), pct(&mut samples, 0.95), pct(&mut samples, 0.99));
-    Row { name, budget_ms, p50, p95, p99, n, pass: p95 <= budget_ms, note: note.into() }
+    Row { name: name.to_string(), budget_ms, p50, p95, p99, n, pass: p95 <= budget_ms, note: note.into() }
 }
 
 fn time<T>(f: impl FnOnce() -> T) -> (T, f64) {
@@ -254,6 +257,26 @@ pub fn run(a: BenchArgs) -> Result<()> {
     }
     if let Some(p) = a.out {
         std::fs::write(p, serde_json::to_vec_pretty(&rows)?)?;
+    }
+    if let Some(b) = a.baseline {
+        let base: Vec<Row> = serde_json::from_slice(&std::fs::read(&b)?)?;
+        let mut regressions = Vec::new();
+        for r in &rows {
+            if let Some(o) = base.iter().find(|o| o.name == r.name) {
+                // Ignore sub-millisecond noise; flag >10% p95 regressions.
+                if r.p95 > o.p95 * 1.10 && r.p95 - o.p95 > 1.0 {
+                    regressions.push(format!("{}: p95 {:.2} -> {:.2} ms", r.name, o.p95, r.p95));
+                }
+            }
+        }
+        if !regressions.is_empty() {
+            eprintln!("\nRegressions over 10% (justify in docs/decisions.md or fix):");
+            for r in &regressions {
+                eprintln!("  {r}");
+            }
+            std::process::exit(2);
+        }
+        eprintln!("\nNo regressions over 10% against {}", b.display());
     }
     Ok(())
 }

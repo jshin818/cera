@@ -1,8 +1,12 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "tools/gen-vault", "benches"]
-exclude = ["crates/vault-app"]
-default-members = ["crates/*", "tools/gen-vault", "benches"]
+# The desktop shell needs a system WebView toolchain; build it explicitly with `-p vault-app`.
+default-members = [
+    "crates/vault-fs", "crates/vault-parse", "crates/vault-store", "crates/vault-search",
+    "crates/vault-embed", "crates/vault-graph", "crates/vault-core", "crates/vault-server",
+    "crates/vault-cli", "tools/gen-vault", "benches",
+]
 
 [workspace.package]
 version = "0.1.0"

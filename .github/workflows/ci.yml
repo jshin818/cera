@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+
+  # Section 8 budgets. Hosted runners are not an M5, so absolute budgets are reported, and the
+  # gate is relative: a >10% p95 regression against the committed baseline fails the job.
+  # Point `runs-on` at a self-hosted M5 runner to enforce the absolute budgets.
+  bench:
+    runs-on: macos-14
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p vault-cli -p gen-vault
+      - run: ./target/release/gen-vault "$RUNNER_TEMP/v10k" --notes 10000
+      - name: Bench (gated against benches/baseline-10k.json when present)
+        run: |
+          if [ -f benches/baseline-10k.json ]; then B="--baseline benches/baseline-10k.json"; fi
+          ./target/release/vault bench "$RUNNER_TEMP/v10k" --out bench.json $B
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench
+          path: bench.json
+
+  app:
+    runs-on: macos-14
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p vault-app

@@ -5,7 +5,7 @@ import { EditorView, Decoration, WidgetType, keymap, placeholder, drawSelection,
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { syntaxTree, indentUnit } from '@codemirror/language';
 import { history, defaultKeymap, historyKeymap, indentMore, indentLess } from '@codemirror/commands';
-import { autocompletion, completionKeymap, startCompletion } from '@codemirror/autocomplete';
+import { autocompletion, completionKeymap, startCompletion, completionStatus, currentCompletions } from '@codemirror/autocomplete';
 import { search, searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { tagColor } from './util.js';
 
@@ -421,22 +421,32 @@ function continueList(view) {
   return true;
 }
 
+// Slash menu blocks. `icon` is either short text (headings) or an SVG path drawn in a small tile.
 const SLASH = [
-  { label: 'Heading 1', detail: '#', apply: '# ' },
-  { label: 'Heading 2', detail: '##', apply: '## ' },
-  { label: 'Heading 3', detail: '###', apply: '### ' },
-  { label: 'To-do', detail: '- [ ]', apply: '- [ ] ' },
-  { label: 'Bulleted list', detail: '-', apply: '- ' },
-  { label: 'Numbered list', detail: '1.', apply: '1. ' },
-  { label: 'Quote', detail: '>', apply: '> ' },
-  { label: 'Callout', detail: '> [!note]', apply: '> [!note]\n> ' },
-  { label: 'Code block', detail: '```', apply: '```\n\n```', cursor: 4 },
-  { label: 'Divider', detail: '---', apply: '---\n' },
-  { label: 'Table', detail: '| |', apply: '| Column | Column |\n| --- | --- |\n|  |  |', cursor: 37 },
-  { label: 'Link to note', detail: '[[', apply: '[[', complete: true },
-  { label: 'Highlight', detail: '==', apply: '====', cursor: 2 },
-  { label: 'Today', detail: 'date', apply: () => new Date().toISOString().slice(0, 10) },
+  { label: 'Heading 1', text: 'H1', apply: '# ' },
+  { label: 'Heading 2', text: 'H2', apply: '## ' },
+  { label: 'Heading 3', text: 'H3', apply: '### ' },
+  { label: 'To-do', icon: '<rect x="4" y="4" width="16" height="16" rx="4"/><path d="m8.5 12 2.5 2.5 4.5-5"/>', apply: '- [ ] ' },
+  { label: 'Bulleted list', icon: '<path d="M10 6h10M10 12h10M10 18h10"/><circle cx="5" cy="6" r="1"/><circle cx="5" cy="12" r="1"/><circle cx="5" cy="18" r="1"/>', apply: '- ' },
+  { label: 'Numbered list', icon: '<path d="M10 6h10M10 12h10M10 18h10M4 4.5h1.5V9M4 9h3M4 15.5c0-1 .8-1.5 1.6-1.5s1.4.5 1.4 1.3c0 1.2-3 2.2-3 3.7h3"/>', apply: '1. ' },
+  { label: 'Quote', icon: '<path d="M5 5v14M10 8h9M10 12h9M10 16h6"/>', apply: '> ' },
+  { label: 'Callout', icon: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/>', apply: '> [!note]\n> ' },
+  { label: 'Code block', icon: '<path d="m8 8-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/>', apply: '```\n\n```', cursor: 4 },
+  { label: 'Divider', icon: '<path d="M4 12h16"/>', apply: '---\n' },
+  { label: 'Table', icon: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M3.5 15h17M12 4.5v15"/>', apply: '| Column | Column |\n| --- | --- |\n|  |  |', cursor: 37 },
+  { label: 'Link to note', icon: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>', apply: '[[', complete: true },
+  { label: 'Highlight', icon: '<path d="m9 15 6.5-6.5a2.1 2.1 0 0 0-3-3L6 12l-1 4z"/><path d="M4 20h16"/>', apply: '====', cursor: 2 },
+  { label: 'Today\u2019s date', icon: '<rect x="4" y="5" width="16" height="15" rx="2.5"/><path d="M4 10h16M9 3v4M15 3v4"/>', apply: () => new Date().toISOString().slice(0, 10) },
 ];
+function slashIcon(c) {
+  if (!c.slash) return null;
+  const el = document.createElement('span');
+  el.className = 'cm-slash-ic';
+  el.setAttribute('aria-hidden', 'true');
+  if (c.slash.text) el.textContent = c.slash.text;
+  else el.innerHTML = `<svg viewBox="0 0 24 24">${c.slash.icon}</svg>`;
+  return el;
+}
 
 function completions(opts) {
   return async ctx => {
@@ -481,7 +491,7 @@ function completions(opts) {
         filter: false,
         options: opts2.map(s => ({
           label: s.label,
-          detail: s.detail,
+          slash: s,
           apply: (view, c, f, t) => {
             const text = typeof s.apply === 'function' ? s.apply() : s.apply;
             const line = view.state.doc.lineAt(f);
@@ -539,7 +549,12 @@ export function createEditor(parent, opts) {
       livePreview(decoOpts),
       highlightSelectionMatches(),
       search({ top: true }),
-      autocompletion({ override: [completions(opts)], icons: false, closeOnBlur: true, activateOnTyping: true }),
+      autocompletion({
+        override: [completions(opts)], icons: false, closeOnBlur: true, activateOnTyping: true, maxRenderedOptions: 40,
+        addToOptions: [{ render: slashIcon, position: 20 }],
+        optionClass: c => (c.slash ? 'cm-slash-opt' : ''),
+        tooltipClass: st => (completionStatus(st) && currentCompletions(st)[0]?.slash ? 'cm-slash-menu' : ''),
+      }),
       placeholder('Start writing… type / for blocks, [[ to link'),
       editable.of(EditorView.editable.of(true)),
       keymap.of([

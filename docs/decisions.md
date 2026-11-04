@@ -26,6 +26,19 @@ Spec: "Vault: Build Specification" (Nov 2026). Product brief from the owner: loo
   (cloud services are a non-goal; WKWebView has no Web Speech recognition).
 - **Delete** moves files to `<vault>/.trash/` (Obsidian's local-trash convention), never unlinks.
 - **Tabs** appear only when more than one note is open (⌘-click a link or result).
+- **Sidebar is one tree** (owner request, Nov 2026). Cēra's separate "Folders" and "Notes" groups are
+  gone: every level, the top level included, lists its folders and then its notes, like Finder and
+  Obsidian. New folder moved to the sidebar header.
+- **Drag and drop everywhere in the tree.** Notes and folders drop onto a folder, into an open
+  folder's contents, or onto empty space (top level); hovering a closed folder springs it open.
+  Folder moves use `rename_folder`, which now refuses moving a folder inside itself.
+- **Graph scopes are named "This note" / "All notes"** instead of Local / Global; switching reloads
+  only the canvas and the toolbar keeps its size.
+- **Slash menu** shows a plain icon and label per block (no raw Markdown syntax) and forces
+  the app font over CodeMirror's monospace tooltip default.
+- **Settings** sheet from the sidebar's bottom-left (⌘,): theme, text size, line width, spell check,
+  folder note counts, vault rescan. UI-only preferences in `localStorage`
+  (`cera.settings`), applied before first paint; nothing is written to the vault or `.obsidian/`.
 
 ## Engine
 

@@ -261,6 +261,9 @@ impl Engine {
     pub fn rename_folder(&self, from: &str, to: &str) -> Result<String> {
         let from = check_rel(from)?;
         let to = check_rel(to)?;
+        if to.starts_with(&format!("{from}/")) {
+            return Err(CoreError::Invalid(format!("can't move {from} inside itself")));
+        }
         let a = vault_fs::to_abs(&self.0.root, &from);
         let b = vault_fs::to_abs(&self.0.root, &to);
         if b.exists() {

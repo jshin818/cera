@@ -23,6 +23,7 @@ let status = {};
 const dirCache = new Map(); // folder path -> listing
 const openFolders = new Set(store.get('cera.openFolders', []));
 let tagsCache = null;
+let vaultName = 'All notes';
 
 /* ---------- toast ---------- */
 let toastT;
@@ -871,8 +872,8 @@ const COMMANDS = [
   ['New folder', '', () => { setSideTab('notes'); $('f-add').click() }],
   ['Go home', '', goHome],
   ['Search everything', '⌘⇧F', () => explore('search')],
-  ['Open graph view', '⌘G', () => explore('graph', cur?.path)],
-  ['Global graph', '', () => explore('graph')],
+  ['Graph of this note', '⌘G', () => explore('graph', cur?.path)],
+  ['Graph of all notes', '', () => explore('graph')],
   ['Browse tags', '', () => explore('tags')],
   ['Browse topics', '', () => explore('topics')],
   ['Vault data', '', () => explore('data')],
@@ -1036,28 +1037,43 @@ async function exploreTopics(ex) {
   ex.onclick = e => { const b = e.target.closest('[data-path]'); if (b) openNote(b.dataset.path, { newTab: e.metaKey || e.ctrlKey }) };
 }
 
+// Two views of one graph: "This note" (the open note and its neighbours, 1 or 2 links away) and
+// "All notes" (the whole vault). Switching reloads only the canvas; the toolbar keeps its size.
 async function exploreGraph(ex, path) {
-  const local = !!path;
-  ex.innerHTML = `<div id="graph-wrap"><canvas id="graph"></canvas>
-    <div class="graph-bar"><span class="ttl">${local ? esc(titleOf(path)) : 'All notes'}</span>
-      <span class="seg"><button data-g="local" ${local ? 'class="on"' : ''} ${cur || path ? '' : 'disabled'}>Local</button><button data-g="global" ${local ? '' : 'class="on"'}>Global</button></span>
-      ${local ? `<span class="seg"><button data-d="1">1 hop</button><button data-d="2" class="on">2 hops</button></span>` : ''}
-    </div><div class="graph-legend" id="g-legend">Loading…</div></div>`;
+  const note = path || cur?.path || null;
+  let local = !!path;
   let depth = 2;
+  ex.innerHTML = `<div id="graph-wrap"><canvas id="graph"></canvas>
+    <div class="graph-bar"><span class="ttl"></span>
+      <span class="seg" role="tablist" aria-label="Graph scope">${note ? `<button data-g="local" role="tab">This note</button>` : ''}<button data-g="global" role="tab">All notes</button></span>
+      <span class="seg" id="g-depth" aria-label="How far to look"><button data-d="1">1 link away</button><button data-d="2">2 links away</button></span>
+    </div><div class="graph-legend" id="g-legend">Loading…</div></div>`;
+  const bar = ex.querySelector('.graph-bar');
+  const paint = () => {
+    bar.querySelector('.ttl').textContent = local ? titleOf(note) : vaultName;
+    bar.querySelectorAll('[data-g]').forEach(b => { const on = (b.dataset.g === 'local') === local; b.classList.toggle('on', on); b.setAttribute('aria-selected', on) });
+    bar.querySelectorAll('[data-d]').forEach(b => b.classList.toggle('on', +b.dataset.d === depth));
+    $('g-depth').style.visibility = local ? '' : 'hidden';
+  };
+  let seq = 0;
   const load = async () => {
+    const s = ++seq;
+    paint();
+    $('g-legend').textContent = 'Loading…';
     const t0 = performance.now();
-    const data = await api.graph(local ? path : undefined, depth, 20000);
+    const data = await api.graph(local ? note : undefined, depth, 20000);
+    if (s !== seq || exView?.kind !== 'graph') return;
     graphHandle?.destroy();
     graphHandle = mountGraph($('graph'), data, { onOpen: (p, newTab) => openNote(p, { newTab }), tip: ex.querySelector('#graph-wrap') });
-    ex.querySelector('#g-legend').textContent = data.aggregated
+    $('g-legend').textContent = data.aggregated
       ? `${fmt(data.nodes.length)} topics shown as single nodes (zoomed out level of detail) · scroll to zoom, drag to pan`
       : `${fmt(data.nodes.length)} notes · ${fmt(data.edges.length)} links · ${(performance.now() - t0).toFixed(0)} ms · scroll to zoom, drag to pan, click to open`;
   };
-  ex.querySelector('.graph-bar').onclick = e => {
+  bar.onclick = e => {
     const g = e.target.closest('[data-g]');
-    if (g) return explore('graph', g.dataset.g === 'local' ? path || cur?.path : undefined);
+    if (g && (g.dataset.g === 'local') !== local) { local = g.dataset.g === 'local'; exView.arg = local ? note : undefined; return load() }
     const d = e.target.closest('[data-d]');
-    if (d) { depth = +d.dataset.d; ex.querySelectorAll('[data-d]').forEach(b => b.classList.toggle('on', b === d)); load() }
+    if (d && +d.dataset.d !== depth) { depth = +d.dataset.d; load() }
   };
   await load();
 }
@@ -1168,7 +1184,7 @@ async function pollStatus() {
   }
   ws = Object.assign({ tabs: [], active: 0, last: null }, boot.workspace || {});
   ws.tabs = (ws.tabs || []).filter(Boolean);
-  if (boot.vault) document.title = `${boot.vault} — Cera`;
+  if (boot.vault) { vaultName = boot.vault; document.title = `${boot.vault} — Cera` }
   // First frame: the last note straight from disk, before the index is ready.
   if (boot.first) {
     if (!ws.tabs.includes(boot.first.path)) { ws.tabs = [boot.first.path]; ws.active = 0 }

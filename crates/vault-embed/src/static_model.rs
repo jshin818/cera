@@ -34,9 +34,9 @@ impl StaticModel {
         let (rows, full_dim) = (shape[0], shape[1]);
         let raw = t.data();
         let full: Vec<f32> = match t.dtype() {
-            safetensors::Dtype::F32 => raw.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect(),
-            safetensors::Dtype::F16 => raw.chunks_exact(2).map(|c| f16_to_f32(u16::from_le_bytes([c[0], c[1]]))).collect(),
-            safetensors::Dtype::BF16 => raw.chunks_exact(2).map(|c| f32::from_bits((u16::from_le_bytes([c[0], c[1]]) as u32) << 16)).collect(),
+            safetensors::Dtype::F32 => raw.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect(),
+            safetensors::Dtype::F16 => raw.as_chunks::<2>().0.iter().map(|c| f16_to_f32(u16::from_le_bytes(*c))).collect(),
+            safetensors::Dtype::BF16 => raw.as_chunks::<2>().0.iter().map(|c| f32::from_bits((u16::from_le_bytes(*c) as u32) << 16)).collect(),
             d => return Err(EmbedError::Format(format!("unsupported dtype {d:?}"))),
         };
         // Matryoshka-style truncation to DIMS (potion models are PCA-ordered, so leading dims carry the most variance).

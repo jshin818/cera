@@ -143,30 +143,23 @@ async function renderFolder(container, path, depth) {
       renderFolder(kids, d.path, depth + 1);
     }
   }
-  if (depth > 0) {
-    const notes = l.notes;
-    if (!notes.length && !l.dirs.length) {
-      const e = document.createElement('div');
-      e.className = 'f-empty';
-      e.style.paddingLeft = 22 + depth * 12 + 'px';
-      e.textContent = 'Empty';
-      container.append(e);
-    } else {
-      const nl = noteList(notes);
-      nl.style.paddingLeft = 10 + depth * 12 + 'px';
-      container.append(nl);
-    }
+  // One tree: every level, the top level included, lists its folders first and then its notes.
+  if (!l.notes.length && !l.dirs.length) {
+    const e = document.createElement('div');
+    e.className = 'f-empty';
+    e.style.paddingLeft = 22 + depth * 12 + 'px';
+    e.textContent = depth ? 'Empty' : 'No notes yet';
+    container.append(e);
+  } else if (l.notes.length) {
+    const nl = noteList(l.notes);
+    nl.style.paddingLeft = 10 + depth * 12 + 'px';
+    container.append(nl);
   }
 }
 
 async function renderSidebar(fresh) {
   if (fresh) dirCache.clear();
-  try {
-    await renderFolder($('f-list'), '', 0);
-    const root = await listing('');
-    $('root-head').hidden = !root.notes.length;
-    $('root-notes').replaceChildren(root.notes.length ? noteList(root.notes) : document.createTextNode(''));
-  } catch (e) { /* engine still starting */ }
+  try { await renderFolder($('f-list'), '', 0) } catch (e) { /* engine still starting */ }
 }
 const refreshSidebar = debounce(() => renderSidebar(true), 250);
 

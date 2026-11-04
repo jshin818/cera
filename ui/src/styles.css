@@ -272,13 +272,20 @@ body.no-counts .f-count { display: none }
 .cm-table { font-family: var(--mono); font-size: 13.5px }
 
 /* autocomplete (slash commands, [[ links) styled as a Cēra popover */
-.cm-tooltip.cm-tooltip-autocomplete { background: var(--pop); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); padding: 5px; font-family: var(--sans) }
-.cm-tooltip.cm-tooltip-autocomplete > ul { max-height: 320px; min-width: 240px; font-family: var(--sans) }
-.cm-tooltip.cm-tooltip-autocomplete > ul > li { padding: 6px 10px !important; border-radius: 7px; line-height: 1.4; color: var(--fg) }
-.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected] { background: var(--hover); color: var(--fg) }
-.cm-completionDetail { color: var(--faint); font-style: normal !important; margin-left: 8px; font-size: 12px }
+.cm-editor .cm-tooltip.cm-tooltip-autocomplete { background: var(--pop); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); padding: 5px; font-family: var(--sans) }
+.cm-editor .cm-tooltip.cm-tooltip-autocomplete > ul { max-height: 320px; min-width: 240px; font-family: var(--sans) !important; font-size: 14px; scrollbar-width: thin }
+.cm-editor .cm-tooltip.cm-tooltip-autocomplete > ul > li { display: flex; align-items: center; padding: 6px 10px !important; border-radius: 7px; line-height: 1.4; color: var(--fg) }
+.cm-editor .cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected] { background: var(--hover); color: var(--fg) }
+.cm-completionLabel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.cm-completionDetail { color: var(--faint); font-style: normal !important; margin-left: 8px; font-size: 12px; white-space: nowrap }
+/* slash menu: a plain icon and label per block, like the command palette */
+.cm-editor .cm-tooltip.cm-slash-menu > ul { min-width: 232px; max-height: 336px }
+.cm-editor .cm-tooltip.cm-slash-menu > ul > li { gap: 10px; padding: 7px 10px !important }
+.cm-slash-ic { display: grid; place-items: center; width: 16px; height: 16px; flex: none; color: var(--muted); font: 600 11px/1 var(--sans) }
+.cm-slash-ic svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round }
 .cm-completionIcon { display: none }
 .cm-completionMatchedText { text-decoration: none; font-weight: 600 }
+.cm-slash-opt .cm-completionMatchedText { font-weight: inherit }
 .cm-tooltip { background: var(--pop); color: var(--fg); border: 1px solid var(--border) }
 .cm-panels { background: var(--pop); color: var(--fg); border-color: var(--border) !important }
 .cm-search input, .cm-search button { font: inherit; font-size: 13px }

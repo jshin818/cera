@@ -9,6 +9,9 @@
 <script>
   // Apply the saved theme before first paint (no flash).
   try { const t = localStorage.getItem('cera.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t } catch {}
+  try { const s = JSON.parse(localStorage.getItem('cera.settings') || '{}'), r = document.documentElement.style;
+    if (s.size) r.setProperty('--ed-size', { small: '15px', large: '18px' }[s.size] || '16px');
+    if (s.width) r.setProperty('--page-w', { narrow: '620px', wide: '880px' }[s.width] || '720px') } catch {}
 </script>
 </head>
 <body>
@@ -28,7 +31,10 @@
       </div>
       <nav id="ex-nav" hidden></nav>
     </div>
-    <div id="side-foot"><span id="index-state"></span></div>
+    <div id="side-foot">
+      <button class="foot-btn" id="settings-btn" aria-label="Settings" title="Settings (⌘,)"><svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Settings</span></button>
+      <span id="index-state"></span>
+    </div>
   </aside>
   <div id="scrim" hidden></div>
   <main id="main">
@@ -89,6 +95,12 @@
     <div class="pal-input"><svg class="ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="q" placeholder="Find a note, search text, or type > for commands" aria-label="Search" autocomplete="off" spellcheck="false"></div>
     <div id="res" role="listbox"></div>
     <div class="pal-foot"><span id="stat"></span><span>↑↓ move · ↵ open · ⌘↵ new tab · esc close</span></div>
+  </div>
+</div>
+<div id="settings-veil" class="veil" hidden>
+  <div id="settings" class="pop" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <header><h2 id="settings-title">Settings</h2><button class="icon" id="settings-close" aria-label="Close settings" title="Close (esc)"><svg class="ic" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></header>
+    <div id="settings-body"></div>
   </div>
 </div>
 <div id="toast" role="status" hidden></div>

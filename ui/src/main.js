@@ -51,11 +51,13 @@ function applyTheme() {
   b.setAttribute('aria-label', b.title);
 }
 function setTheme(t) {
+  if (t === theme) return;
   const root = document.documentElement;
   if (!matchMedia('(prefers-reduced-motion: reduce)').matches) { root.classList.add('theme-fade'); setTimeout(() => root.classList.remove('theme-fade'), 220) }
   theme = t;
   try { localStorage.setItem('cera.theme', t) } catch {}
   applyTheme();
+  if (!$('settings-veil').hidden) renderSettings();
 }
 $('theme-btn').onclick = () => setTheme(effectiveTheme() === 'dark' ? 'light' : 'dark');
 darkQuery.addEventListener('change', applyTheme);
@@ -878,6 +880,7 @@ const COMMANDS = [
   ['Browse topics', '', () => explore('topics')],
   ['Vault data', '', () => explore('data')],
   ['Toggle theme', '', () => $('theme-btn').click()],
+  ['Open settings', '⌘,', () => openSettings()],
   ['Toggle sidebar', '⌘\\', () => setSide(app.classList.contains('collapsed'))],
   ['Rename note', '', () => { if (cur) { $('title').focus(); $('title').select() } }],
   ['Move note to trash', '', trashCurrent],
@@ -1108,6 +1111,64 @@ async function exploreData(ex) {
   ex.onclick = e => { const b = e.target.closest('[data-path]'); if (b) openNote(b.dataset.path, { newTab: e.metaKey || e.ctrlKey }) };
 }
 
+/* ---------- settings: a small sheet from the bottom-left of the sidebar ---------- */
+const SETTINGS_DEFAULT = { size: 'default', width: 'default', spellcheck: false, counts: true };
+const settings = Object.assign({}, SETTINGS_DEFAULT, store.get('cera.settings', {}));
+const SIZES = { small: '15px', default: '16px', large: '18px' };
+const WIDTHS = { narrow: '620px', default: '720px', wide: '880px' };
+function applySettings() {
+  const r = document.documentElement.style;
+  r.setProperty('--ed-size', SIZES[settings.size] || SIZES.default);
+  r.setProperty('--page-w', WIDTHS[settings.width] || WIDTHS.default);
+  editor.view.contentDOM.spellcheck = !!settings.spellcheck;
+  document.body.classList.toggle('no-counts', !settings.counts);
+  editor.view.requestMeasure();
+}
+function setSetting(k, v) {
+  settings[k] = v;
+  store.set('cera.settings', settings);
+  applySettings();
+  renderSettings();
+}
+const seg = (key, value, options) => `<span class="seg" role="radiogroup">${options.map(([v, label]) => `<button role="radio" aria-checked="${v === value}" class="${v === value ? 'on' : ''}" data-set="${key}" data-v="${v}">${label}</button>`).join('')}</span>`;
+const toggle = (key, on, label) => `<button class="switch${on ? ' on' : ''}" role="switch" aria-checked="${on}" aria-label="${label}" data-toggle="${key}"><i></i></button>`;
+const srow = (label, hint, control) => `<div class="s-row"><div><b>${label}</b>${hint ? `<small>${hint}</small>` : ''}</div>${control}</div>`;
+function renderSettings() {
+  const st = status || {};
+  $('settings-body').innerHTML = `
+    <section><h3>Appearance</h3>
+      ${srow('Theme', '', seg('theme', theme, [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']]))}
+    </section>
+    <section><h3>Editor</h3>
+      ${srow('Text size', '', seg('size', settings.size, [['small', 'Small'], ['default', 'Default'], ['large', 'Large']]))}
+      ${srow('Line width', '', seg('width', settings.width, [['narrow', 'Narrow'], ['default', 'Default'], ['wide', 'Wide']]))}
+      ${srow('Spell check', '', toggle('spellcheck', settings.spellcheck, 'Spell check'))}
+    </section>
+    <section><h3>Sidebar</h3>
+      ${srow('Note counts', '', toggle('counts', settings.counts, 'Note counts'))}
+    </section>
+    <section><h3>Vault</h3>
+      ${srow(esc(vaultName), `${fmt(st.notes || 0)} notes`, `<button class="btn quiet" id="s-rescan">Rescan</button>`)}
+    </section>`;
+}
+function openSettings() {
+  renderSettings();
+  $('settings-veil').hidden = false;
+  $('settings-close').focus();
+}
+function closeSettings() { $('settings-veil').hidden = true; $('settings-btn').focus() }
+$('settings-btn').onclick = openSettings;
+$('settings-close').onclick = closeSettings;
+$('settings-veil').addEventListener('mousedown', e => { if (e.target === $('settings-veil')) closeSettings() });
+$('settings-body').addEventListener('click', e => {
+  const b = e.target.closest('[data-set]');
+  if (b) return b.dataset.set === 'theme' ? setTheme(b.dataset.v) : setSetting(b.dataset.set, b.dataset.v);
+  const t = e.target.closest('[data-toggle]');
+  if (t) return setSetting(t.dataset.toggle, !settings[t.dataset.toggle]);
+  if (e.target.closest('#s-rescan')) api.rescan().then(() => toast('Rescanning the vault'), fail);
+});
+applySettings();
+
 /* ---------- keyboard ---------- */
 addEventListener('keydown', e => {
   const mod = e.metaKey || e.ctrlKey;
@@ -1120,9 +1181,10 @@ addEventListener('keydown', e => {
   else if (mod && k === 'g') { e.preventDefault(); explore('graph', cur?.path) }
   else if (mod && k === 'w' && view === 'page' && ws.tabs.length) { e.preventDefault(); closeTab(ws.active) }
   else if (mod && k === 's') { e.preventDefault(); save() }
+  else if (mod && e.key === ',') { e.preventDefault(); $('settings-veil').hidden ? openSettings() : closeSettings() }
   else if (mod && e.key === '\\') { e.preventDefault(); setSide(app.classList.contains('collapsed')) }
   else if (e.ctrlKey && e.key === 'Tab' && ws.tabs.length > 1) { e.preventDefault(); ws.active = (ws.active + (e.shiftKey ? ws.tabs.length - 1 : 1)) % ws.tabs.length; openNote(ws.tabs[ws.active]) }
-  else if (e.key === 'Escape') { if (!$('veil').hidden) closePal(); else ['menu', 'move', 'fmenu', 'tagsug'].forEach(id => ($(id).hidden = true)) }
+  else if (e.key === 'Escape') { if (!$('settings-veil').hidden) closeSettings(); else if (!$('veil').hidden) closePal(); else ['menu', 'move', 'fmenu', 'tagsug'].forEach(id => ($(id).hidden = true)) }
 });
 document.addEventListener('mousedown', e => {
   if (!e.target.closest('#menu, #more')) $('menu').hidden = true;

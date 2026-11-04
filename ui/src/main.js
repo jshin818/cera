@@ -23,6 +23,7 @@ let status = {};
 const dirCache = new Map(); // folder path -> listing
 const openFolders = new Set(store.get('cera.openFolders', []));
 let tagsCache = null;
+let vaultName = 'All notes';
 
 /* ---------- toast ---------- */
 let toastT;
@@ -50,11 +51,13 @@ function applyTheme() {
   b.setAttribute('aria-label', b.title);
 }
 function setTheme(t) {
+  if (t === theme) return;
   const root = document.documentElement;
   if (!matchMedia('(prefers-reduced-motion: reduce)').matches) { root.classList.add('theme-fade'); setTimeout(() => root.classList.remove('theme-fade'), 220) }
   theme = t;
   try { localStorage.setItem('cera.theme', t) } catch {}
   applyTheme();
+  if (!$('settings-veil').hidden) renderSettings();
 }
 $('theme-btn').onclick = () => setTheme(effectiveTheme() === 'dark' ? 'light' : 'dark');
 darkQuery.addEventListener('change', applyTheme);
@@ -123,7 +126,7 @@ function noteList(notes, depthClass = '') {
 
 function folderRow(d, depth) {
   const open = openFolders.has(d.path);
-  return `<div class="f-row${open ? ' open' : ''}" data-folder="${esc(d.path)}" role="treeitem" aria-expanded="${open}" tabindex="0" style="padding-left:${6 + depth * 12}px">
+  return `<div class="f-row${open ? ' open' : ''}" data-folder="${esc(d.path)}" draggable="true" role="treeitem" aria-expanded="${open}" tabindex="0" style="padding-left:${6 + depth * 12}px">
     ${SVG(ICON.chev, 'ic chev')}${SVG(ICON.folder, 'ic fold')}<span class="f-name">${esc(d.name)}</span>
     <span class="f-count">${d.notes ? fmt(d.notes) : ''}</span>
     <button class="f-act" data-act="more" aria-label="Folder actions" title="More">${SVG(ICON.more)}</button></div>`;
@@ -143,30 +146,23 @@ async function renderFolder(container, path, depth) {
       renderFolder(kids, d.path, depth + 1);
     }
   }
-  if (depth > 0) {
-    const notes = l.notes;
-    if (!notes.length && !l.dirs.length) {
-      const e = document.createElement('div');
-      e.className = 'f-empty';
-      e.style.paddingLeft = 22 + depth * 12 + 'px';
-      e.textContent = 'Empty';
-      container.append(e);
-    } else {
-      const nl = noteList(notes);
-      nl.style.paddingLeft = 10 + depth * 12 + 'px';
-      container.append(nl);
-    }
+  // One tree: every level, the top level included, lists its folders first and then its notes.
+  if (!l.notes.length && !l.dirs.length) {
+    const e = document.createElement('div');
+    e.className = 'f-empty';
+    e.style.paddingLeft = 22 + depth * 12 + 'px';
+    e.textContent = depth ? 'Empty' : 'No notes yet';
+    container.append(e);
+  } else if (l.notes.length) {
+    const nl = noteList(l.notes);
+    nl.style.paddingLeft = 10 + depth * 12 + 'px';
+    container.append(nl);
   }
 }
 
 async function renderSidebar(fresh) {
   if (fresh) dirCache.clear();
-  try {
-    await renderFolder($('f-list'), '', 0);
-    const root = await listing('');
-    $('root-head').hidden = !root.notes.length;
-    $('root-notes').replaceChildren(root.notes.length ? noteList(root.notes) : document.createTextNode(''));
-  } catch (e) { /* engine still starting */ }
+  try { await renderFolder($('f-list'), '', 0) } catch (e) { /* engine still starting */ }
 }
 const refreshSidebar = debounce(() => renderSidebar(true), 250);
 
@@ -200,24 +196,94 @@ function toggleFolder(path) {
   renderSidebar(false);
 }
 
-/* drag notes onto folders to move them */
+/* drag and drop: notes and folders move onto a folder, into an open folder's contents, or onto
+   empty space in the tree (the top level). Hovering a closed folder while dragging opens it. */
+const NOTE_T = 'text/x-cera-path', FOLDER_T = 'text/x-cera-folder';
+let dragging = null;     // { kind: 'note' | 'folder', path }
+let dropEl = null;
+let springT = null;
+function dropTargetAt(el) {
+  const row = el.closest('.f-row[data-folder]');
+  if (row) return { el: row, folder: row.dataset.folder };
+  const kids = el.closest('.f-kids');
+  if (kids) { const r = kids.parentElement.querySelector(':scope > .f-row'); return { el: r, folder: r.dataset.folder } }
+  return { el: $('notes-pane'), folder: '' };
+}
+function canDrop(folder) {
+  if (!dragging) return false;
+  const p = dragging.path;
+  if (dragging.kind === 'folder') return folder !== p && !folder.startsWith(p + '/') && folder !== folderOf(p);
+  return folder !== folderOf(p);
+}
+function setDropEl(el) {
+  if (dropEl === el) return;
+  dropEl?.classList.remove('drop');
+  dropEl = el;
+  el?.classList.add('drop');
+  clearTimeout(springT);
+  const f = el?.dataset.folder;
+  if (f && !openFolders.has(f)) springT = setTimeout(() => { if (dropEl === el) toggleFolder(f) }, 650);
+}
+function endDrag() {
+  setDropEl(null);
+  document.querySelector('.dragging')?.classList.remove('dragging');
+  $('notes-pane').classList.remove('dragging-in');
+  dragging = null;
+}
 $('side-scroll').addEventListener('dragstart', e => {
   const n = e.target.closest('.note-link[data-path]');
-  if (n) e.dataTransfer.setData('text/x-cera-path', n.dataset.path);
+  const f = !n && e.target.closest('.f-row[data-folder]');
+  if (!n && !f) return;
+  dragging = n ? { kind: 'note', path: n.dataset.path } : { kind: 'folder', path: f.dataset.folder };
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData(n ? NOTE_T : FOLDER_T, dragging.path);
+  e.dataTransfer.setData('text/plain', n ? titleOf(dragging.path) : dragging.path.split('/').pop());
+  (n || f).classList.add('dragging');
+  $('notes-pane').classList.add('dragging-in');
 });
 $('side-scroll').addEventListener('dragover', e => {
-  const row = e.target.closest('.f-row, .f-head');
-  if (row && e.dataTransfer.types.includes('text/x-cera-path')) { e.preventDefault(); row.classList.add('drop') }
-});
-$('side-scroll').addEventListener('dragleave', e => e.target.closest('.f-row, .f-head')?.classList.remove('drop'));
-$('side-scroll').addEventListener('drop', async e => {
-  const row = e.target.closest('.f-row, .f-head');
-  const path = e.dataTransfer.getData('text/x-cera-path');
-  row?.classList.remove('drop');
-  if (!row || !path) return;
+  if (!dragging) return;
+  const t = dropTargetAt(e.target);
+  if (!canDrop(t.folder)) { e.dataTransfer.dropEffect = 'none'; setDropEl(null); return }
   e.preventDefault();
-  moveNote(path, row.dataset.folder || '');
+  e.dataTransfer.dropEffect = 'move';
+  setDropEl(t.el);
 });
+$('side-scroll').addEventListener('dragleave', e => { if (!$('side-scroll').contains(e.relatedTarget)) setDropEl(null) });
+$('side-scroll').addEventListener('dragend', endDrag);
+$('side-scroll').addEventListener('drop', e => {
+  if (!dragging) return;
+  e.preventDefault();
+  const t = dropTargetAt(e.target);
+  const d = dragging;
+  const ok = canDrop(t.folder);
+  endDrag();
+  if (!ok) return;
+  if (d.kind === 'note') moveNote(d.path, t.folder); else moveFolder(d.path, t.folder);
+});
+
+async function moveFolder(path, into) {
+  const name = path.split('/').pop();
+  const to = into ? `${into}/${name}` : name;
+  try {
+    const r = await api.renameFolder(path, to);
+    retargetFolder(path, r.path);
+    if (into) openFolders.add(into);
+    store.set('cera.openFolders', [...openFolders]);
+    refreshSidebar();
+    toast(`Moved “${name}” to ${into ? into.split('/').pop() : 'the top level'}`);
+  } catch (e) { fail(e) }
+}
+// After a folder moves or is renamed, keep open folders, tabs and the open note pointing at it.
+function retargetFolder(from, to) {
+  const swap = p => (p === from || p.startsWith(from + '/') ? to + p.slice(from.length) : p);
+  for (const p of [...openFolders]) { const q = swap(p); if (q !== p) { openFolders.delete(p); openFolders.add(q) } }
+  ws.tabs = ws.tabs.map(swap);
+  if (ws.last) ws.last = swap(ws.last);
+  saveWs();
+  renderTabs();
+  if (cur) { const q = swap(cur.path); if (q !== cur.path) { cur.path = q; renderCrumb() } }
+}
 
 async function moveNote(path, folder) {
   const name = path.split('/').pop();
@@ -228,7 +294,7 @@ async function moveNote(path, folder) {
     retargetTabs(path, r.path);
     if (cur?.path === path) { cur.path = r.path; renderCrumb() }
     refreshSidebar();
-    toast(`Moved to ${folder || 'the top level'}`);
+    toast(`Moved to ${folder ? folder.split('/').pop() : 'the top level'}`);
   } catch (e) { fail(e) }
 }
 
@@ -252,8 +318,10 @@ $('fm-rename').onclick = () => {
   const parent = folderOf(menuFolder);
   inlineFolderName(parent, menuFolder.split('/').pop(), async name => {
     const to = parent ? `${parent}/${name}` : name;
-    await api.renameFolder(menuFolder, to);
-    if (openFolders.delete(menuFolder)) openFolders.add(to);
+    const from = menuFolder;
+    await api.renameFolder(from, to);
+    retargetFolder(from, to);
+    store.set('cera.openFolders', [...openFolders]);
   }, menuFolder);
 };
 $('fm-del').onclick = async () => {
@@ -806,12 +874,13 @@ const COMMANDS = [
   ['New folder', '', () => { setSideTab('notes'); $('f-add').click() }],
   ['Go home', '', goHome],
   ['Search everything', '⌘⇧F', () => explore('search')],
-  ['Open graph view', '⌘G', () => explore('graph', cur?.path)],
-  ['Global graph', '', () => explore('graph')],
+  ['Graph of this note', '⌘G', () => explore('graph', cur?.path)],
+  ['Graph of all notes', '', () => explore('graph')],
   ['Browse tags', '', () => explore('tags')],
   ['Browse topics', '', () => explore('topics')],
   ['Vault data', '', () => explore('data')],
   ['Toggle theme', '', () => $('theme-btn').click()],
+  ['Open settings', '⌘,', () => openSettings()],
   ['Toggle sidebar', '⌘\\', () => setSide(app.classList.contains('collapsed'))],
   ['Rename note', '', () => { if (cur) { $('title').focus(); $('title').select() } }],
   ['Move note to trash', '', trashCurrent],
@@ -971,28 +1040,43 @@ async function exploreTopics(ex) {
   ex.onclick = e => { const b = e.target.closest('[data-path]'); if (b) openNote(b.dataset.path, { newTab: e.metaKey || e.ctrlKey }) };
 }
 
+// Two views of one graph: "This note" (the open note and its neighbours, 1 or 2 links away) and
+// "All notes" (the whole vault). Switching reloads only the canvas; the toolbar keeps its size.
 async function exploreGraph(ex, path) {
-  const local = !!path;
-  ex.innerHTML = `<div id="graph-wrap"><canvas id="graph"></canvas>
-    <div class="graph-bar"><span class="ttl">${local ? esc(titleOf(path)) : 'All notes'}</span>
-      <span class="seg"><button data-g="local" ${local ? 'class="on"' : ''} ${cur || path ? '' : 'disabled'}>Local</button><button data-g="global" ${local ? '' : 'class="on"'}>Global</button></span>
-      ${local ? `<span class="seg"><button data-d="1">1 hop</button><button data-d="2" class="on">2 hops</button></span>` : ''}
-    </div><div class="graph-legend" id="g-legend">Loading…</div></div>`;
+  const note = path || cur?.path || null;
+  let local = !!path;
   let depth = 2;
+  ex.innerHTML = `<div id="graph-wrap"><canvas id="graph"></canvas>
+    <div class="graph-bar"><span class="ttl"></span>
+      <span class="seg" role="tablist" aria-label="Graph scope">${note ? `<button data-g="local" role="tab">This note</button>` : ''}<button data-g="global" role="tab">All notes</button></span>
+      <span class="seg" id="g-depth" aria-label="How far to look"><button data-d="1">1 link away</button><button data-d="2">2 links away</button></span>
+    </div><div class="graph-legend" id="g-legend">Loading…</div></div>`;
+  const bar = ex.querySelector('.graph-bar');
+  const paint = () => {
+    bar.querySelector('.ttl').textContent = local ? titleOf(note) : vaultName;
+    bar.querySelectorAll('[data-g]').forEach(b => { const on = (b.dataset.g === 'local') === local; b.classList.toggle('on', on); b.setAttribute('aria-selected', on) });
+    bar.querySelectorAll('[data-d]').forEach(b => b.classList.toggle('on', +b.dataset.d === depth));
+    $('g-depth').style.visibility = local ? '' : 'hidden';
+  };
+  let seq = 0;
   const load = async () => {
+    const s = ++seq;
+    paint();
+    $('g-legend').textContent = 'Loading…';
     const t0 = performance.now();
-    const data = await api.graph(local ? path : undefined, depth, 20000);
+    const data = await api.graph(local ? note : undefined, depth, 20000);
+    if (s !== seq || exView?.kind !== 'graph') return;
     graphHandle?.destroy();
     graphHandle = mountGraph($('graph'), data, { onOpen: (p, newTab) => openNote(p, { newTab }), tip: ex.querySelector('#graph-wrap') });
-    ex.querySelector('#g-legend').textContent = data.aggregated
+    $('g-legend').textContent = data.aggregated
       ? `${fmt(data.nodes.length)} topics shown as single nodes (zoomed out level of detail) · scroll to zoom, drag to pan`
       : `${fmt(data.nodes.length)} notes · ${fmt(data.edges.length)} links · ${(performance.now() - t0).toFixed(0)} ms · scroll to zoom, drag to pan, click to open`;
   };
-  ex.querySelector('.graph-bar').onclick = e => {
+  bar.onclick = e => {
     const g = e.target.closest('[data-g]');
-    if (g) return explore('graph', g.dataset.g === 'local' ? path || cur?.path : undefined);
+    if (g && (g.dataset.g === 'local') !== local) { local = g.dataset.g === 'local'; exView.arg = local ? note : undefined; return load() }
     const d = e.target.closest('[data-d]');
-    if (d) { depth = +d.dataset.d; ex.querySelectorAll('[data-d]').forEach(b => b.classList.toggle('on', b === d)); load() }
+    if (d && +d.dataset.d !== depth) { depth = +d.dataset.d; load() }
   };
   await load();
 }
@@ -1027,6 +1111,69 @@ async function exploreData(ex) {
   ex.onclick = e => { const b = e.target.closest('[data-path]'); if (b) openNote(b.dataset.path, { newTab: e.metaKey || e.ctrlKey }) };
 }
 
+/* ---------- settings: a small sheet from the bottom-left of the sidebar ---------- */
+const SETTINGS_DEFAULT = { size: 'default', width: 'default', spellcheck: false, counts: true };
+const settings = Object.assign({}, SETTINGS_DEFAULT, store.get('cera.settings', {}));
+const SIZES = { small: '15px', default: '16px', large: '18px' };
+const WIDTHS = { narrow: '620px', default: '720px', wide: '880px' };
+function applySettings() {
+  const r = document.documentElement.style;
+  r.setProperty('--ed-size', SIZES[settings.size] || SIZES.default);
+  r.setProperty('--page-w', WIDTHS[settings.width] || WIDTHS.default);
+  editor.view.contentDOM.spellcheck = !!settings.spellcheck;
+  document.body.classList.toggle('no-counts', !settings.counts);
+  editor.view.requestMeasure();
+}
+function setSetting(k, v) {
+  settings[k] = v;
+  store.set('cera.settings', settings);
+  applySettings();
+  renderSettings();
+}
+const seg = (key, value, options) => `<span class="seg" role="radiogroup">${options.map(([v, label]) => `<button role="radio" aria-checked="${v === value}" class="${v === value ? 'on' : ''}" data-set="${key}" data-v="${v}">${label}</button>`).join('')}</span>`;
+const toggle = (key, on, label) => `<button class="switch${on ? ' on' : ''}" role="switch" aria-checked="${on}" aria-label="${label}" data-toggle="${key}"><i></i></button>`;
+const srow = (label, hint, control) => `<div class="s-row"><div><b>${label}</b>${hint ? `<small>${hint}</small>` : ''}</div>${control}</div>`;
+function renderSettings() {
+  const st = status || {};
+  const keys = [['⌘K', 'Find a note'], ['⌘N', 'New note'], ['⌘P', 'Commands'], ['⌘G', 'Graph of this note'], ['⌘\\', 'Toggle sidebar'], ['⌘,', 'Settings']];
+  $('settings-body').innerHTML = `
+    <section><h3>Appearance</h3>
+      ${srow('Theme', '', seg('theme', theme, [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']]))}
+    </section>
+    <section><h3>Editor</h3>
+      ${srow('Text size', '', seg('size', settings.size, [['small', 'Small'], ['default', 'Default'], ['large', 'Large']]))}
+      ${srow('Line width', '', seg('width', settings.width, [['narrow', 'Narrow'], ['default', 'Default'], ['wide', 'Wide']]))}
+      ${srow('Spell check', 'Underline misspelled words while you write', toggle('spellcheck', settings.spellcheck, 'Spell check'))}
+    </section>
+    <section><h3>Sidebar</h3>
+      ${srow('Note counts', 'Show how many notes each folder holds', toggle('counts', settings.counts, 'Note counts'))}
+    </section>
+    <section><h3>Vault</h3>
+      ${srow(esc(vaultName), `${fmt(st.notes || 0)} notes · ${st.ready ? (st.embedding_pending ? `embedding ${fmt(st.embedding_pending)}` : 'up to date') : 'indexing…'}`, `<button class="btn quiet" id="s-rescan">Rescan</button>`)}
+      <p class="s-note">Your notes are plain Markdown files in this folder. Search data lives in <code>.vault/</code> and can be rebuilt at any time.</p>
+    </section>
+    <section><h3>Keyboard</h3>
+      <div class="s-keys">${keys.map(([k, l]) => `<span>${l}</span><span class="kbd">${esc(k)}</span>`).join('')}</div>
+    </section>`;
+}
+function openSettings() {
+  renderSettings();
+  $('settings-veil').hidden = false;
+  $('settings-close').focus();
+}
+function closeSettings() { $('settings-veil').hidden = true; $('settings-btn').focus() }
+$('settings-btn').onclick = openSettings;
+$('settings-close').onclick = closeSettings;
+$('settings-veil').addEventListener('mousedown', e => { if (e.target === $('settings-veil')) closeSettings() });
+$('settings-body').addEventListener('click', e => {
+  const b = e.target.closest('[data-set]');
+  if (b) return b.dataset.set === 'theme' ? setTheme(b.dataset.v) : setSetting(b.dataset.set, b.dataset.v);
+  const t = e.target.closest('[data-toggle]');
+  if (t) return setSetting(t.dataset.toggle, !settings[t.dataset.toggle]);
+  if (e.target.closest('#s-rescan')) api.rescan().then(() => toast('Rescanning the vault'), fail);
+});
+applySettings();
+
 /* ---------- keyboard ---------- */
 addEventListener('keydown', e => {
   const mod = e.metaKey || e.ctrlKey;
@@ -1039,9 +1186,10 @@ addEventListener('keydown', e => {
   else if (mod && k === 'g') { e.preventDefault(); explore('graph', cur?.path) }
   else if (mod && k === 'w' && view === 'page' && ws.tabs.length) { e.preventDefault(); closeTab(ws.active) }
   else if (mod && k === 's') { e.preventDefault(); save() }
+  else if (mod && e.key === ',') { e.preventDefault(); $('settings-veil').hidden ? openSettings() : closeSettings() }
   else if (mod && e.key === '\\') { e.preventDefault(); setSide(app.classList.contains('collapsed')) }
   else if (e.ctrlKey && e.key === 'Tab' && ws.tabs.length > 1) { e.preventDefault(); ws.active = (ws.active + (e.shiftKey ? ws.tabs.length - 1 : 1)) % ws.tabs.length; openNote(ws.tabs[ws.active]) }
-  else if (e.key === 'Escape') { if (!$('veil').hidden) closePal(); else ['menu', 'move', 'fmenu', 'tagsug'].forEach(id => ($(id).hidden = true)) }
+  else if (e.key === 'Escape') { if (!$('settings-veil').hidden) closeSettings(); else if (!$('veil').hidden) closePal(); else ['menu', 'move', 'fmenu', 'tagsug'].forEach(id => ($(id).hidden = true)) }
 });
 document.addEventListener('mousedown', e => {
   if (!e.target.closest('#menu, #more')) $('menu').hidden = true;
@@ -1103,7 +1251,7 @@ async function pollStatus() {
   }
   ws = Object.assign({ tabs: [], active: 0, last: null }, boot.workspace || {});
   ws.tabs = (ws.tabs || []).filter(Boolean);
-  if (boot.vault) document.title = `${boot.vault} — Cera`;
+  if (boot.vault) { vaultName = boot.vault; document.title = `${boot.vault} — Cera` }
   // First frame: the last note straight from disk, before the index is ready.
   if (boot.first) {
     if (!ws.tabs.includes(boot.first.path)) { ws.tabs = [boot.first.path]; ws.active = 0 }

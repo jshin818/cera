@@ -9,6 +9,7 @@
   --sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
   --ease: cubic-bezier(.2, .8, .2, 1);
+  --ed-size: 16px; --page-w: 720px;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
@@ -43,7 +44,10 @@ svg { display: block; flex: none }
 .row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 34px; padding: 6px 8px; border-radius: 8px; text-align: left; color: var(--fg) }
 .row:hover { background: var(--hover) }
 #side-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 12px }
-#side-foot { padding: 6px 16px 10px; color: var(--faint); font-size: 12px; min-height: 28px; font-variant-numeric: tabular-nums }
+#side-foot { display: flex; align-items: center; gap: 8px; padding: 6px 12px 10px 8px; color: var(--faint); font-size: 12px; min-height: 44px; font-variant-numeric: tabular-nums }
+#index-state { margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.foot-btn { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px 0 8px; border-radius: 8px; color: var(--muted); font-size: 13px }
+.foot-btn:hover { background: var(--hover); color: var(--fg) }
 .group { font-size: 12px; font-weight: 500; color: var(--muted); padding: 14px 8px 4px }
 .note-link { display: block; width: 100%; padding: 6px 8px; border-radius: 8px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
 .note-link:hover { background: var(--hover) }
@@ -92,7 +96,7 @@ svg { display: block; flex: none }
 .hint { text-align: center; color: var(--faint); font-size: 12px }
 
 /* page */
-#page { max-width: 720px; margin: 0 auto; padding-block: 7vh 30vh }
+#page { max-width: var(--page-w); margin: 0 auto; padding-block: 7vh 30vh }
 #title { display: block; width: 100%; resize: none; overflow: hidden; font-size: 38px; line-height: 1.15; font-weight: 600; letter-spacing: -.03em; padding: 0 0 0 0; field-sizing: content; caret-color: var(--honey) }
 #meta { color: var(--faint); font-size: 13px; margin: 10px 0 8px; font-variant-numeric: tabular-nums }
 #dupe { margin: 0 0 18px; padding: 10px 14px; border-radius: 10px; background: var(--subtle); color: var(--muted); font-size: 13px }
@@ -129,12 +133,14 @@ button.tag-chip { padding: 0 10px }
 .ctx .btn-s:hover { color: var(--fg); background: var(--bg) }
 .why { color: var(--faint); font-size: 12px; font-weight: 400; margin-left: 8px }
 
-/* folders */
-.f-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 0 2px 8px; font-size: 12px; font-weight: 500; color: var(--muted) }
-.f-head .icon { width: 26px; height: 26px }
+/* folders and notes: one tree */
+#notes-pane { min-height: 100%; padding-top: 4px; border-radius: 10px }
+#notes-pane.drop { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--honey) 70%, transparent); background: color-mix(in srgb, var(--honey) 5%, transparent) }
+.dragging { opacity: .45 }
+body.no-counts .f-count { display: none }
 .f-row { display: flex; align-items: center; gap: 7px; min-height: 34px; padding: 3px 4px 3px 6px; border-radius: 8px; cursor: pointer; user-select: none }
 .f-row:hover { background: var(--hover) }
-.f-row.drop { background: var(--subtle); box-shadow: inset 0 0 0 1.5px var(--honey) }
+.f-row.drop { background: color-mix(in srgb, var(--honey) 14%, transparent); box-shadow: inset 0 0 0 1.5px var(--honey) }
 .f-row .chev { width: 14px; height: 14px; color: var(--faint); transition: transform .12s }
 .f-row.open .chev { transform: rotate(90deg) }
 .f-row .ic.fold { color: var(--fg) }
@@ -218,7 +224,7 @@ button.tag-chip { padding: 0 10px }
 .graph-legend { position: absolute; left: 16px; bottom: 14px; color: var(--faint); font-size: 12px; background: var(--bg); padding: 4px 8px; border-radius: 8px }
 
 /* editor (CodeMirror 6, Obsidian-style live preview) */
-.prose { font-size: 16px; line-height: 1.72; overflow-wrap: anywhere }
+.prose { font-size: var(--ed-size); line-height: 1.72; overflow-wrap: anywhere }
 #ed .cm-editor { outline: 0; background: transparent }
 #ed .cm-editor.cm-focused { outline: 0 }
 #ed .cm-scroller { font-family: var(--sans); line-height: 1.72; overflow: visible }
@@ -270,13 +276,21 @@ button.tag-chip { padding: 0 10px }
 .cm-table { font-family: var(--mono); font-size: 13.5px }
 
 /* autocomplete (slash commands, [[ links) styled as a Cēra popover */
-.cm-tooltip.cm-tooltip-autocomplete { background: var(--pop); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); padding: 5px; font-family: var(--sans) }
-.cm-tooltip.cm-tooltip-autocomplete > ul { max-height: 320px; min-width: 240px; font-family: var(--sans) }
-.cm-tooltip.cm-tooltip-autocomplete > ul > li { padding: 6px 10px !important; border-radius: 7px; line-height: 1.4; color: var(--fg) }
-.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected] { background: var(--hover); color: var(--fg) }
-.cm-completionDetail { color: var(--faint); font-style: normal !important; margin-left: 8px; font-size: 12px }
+.cm-editor .cm-tooltip.cm-tooltip-autocomplete { background: var(--pop); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); padding: 5px; font-family: var(--sans) }
+.cm-editor .cm-tooltip.cm-tooltip-autocomplete > ul { max-height: 320px; min-width: 240px; font-family: var(--sans) !important; font-size: 14px; scrollbar-width: thin }
+.cm-editor .cm-tooltip.cm-tooltip-autocomplete > ul > li { display: flex; align-items: center; padding: 6px 10px !important; border-radius: 7px; line-height: 1.4; color: var(--fg) }
+.cm-editor .cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected] { background: var(--hover); color: var(--fg) }
+.cm-completionLabel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.cm-completionDetail { color: var(--faint); font-style: normal !important; margin-left: 8px; font-size: 12px; white-space: nowrap }
+/* slash menu: an icon tile and a plain label per block */
+.cm-editor .cm-tooltip.cm-slash-menu > ul { min-width: 232px; max-height: 336px }
+.cm-editor .cm-tooltip.cm-slash-menu > ul > li { gap: 10px; padding: 4px 8px 4px 5px !important; min-height: 36px }
+.cm-slash-ic { display: grid; place-items: center; width: 26px; height: 26px; flex: none; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); color: var(--muted); font: 600 11px/1 var(--sans); letter-spacing: -.01em }
+.cm-slash-ic svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round }
+.cm-slash-opt[aria-selected] .cm-slash-ic { color: var(--fg); border-color: var(--faint) }
 .cm-completionIcon { display: none }
 .cm-completionMatchedText { text-decoration: none; font-weight: 600 }
+.cm-slash-opt .cm-completionMatchedText { font-weight: inherit }
 .cm-tooltip { background: var(--pop); color: var(--fg); border: 1px solid var(--border) }
 .cm-panels { background: var(--pop); color: var(--fg); border-color: var(--border) !important }
 .cm-search input, .cm-search button { font: inherit; font-size: 13px }
@@ -287,7 +301,7 @@ button.tag-chip { padding: 0 10px }
 /* floating */
 .pop { position: fixed; z-index: 50; background: var(--pop); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow) }
 #menu { top: 48px; right: 12px }
-#veil { position: fixed; inset: 0; z-index: 60; background: rgb(0 0 0 / .35); display: flex; justify-content: center; align-items: flex-start; padding: 14vh 16px 16px }
+#veil, .veil { position: fixed; inset: 0; z-index: 60; background: rgb(0 0 0 / .35); display: flex; justify-content: center; align-items: flex-start; padding: 14vh 16px 16px }
 #pal { width: 100%; max-width: 640px; max-height: 66vh; display: flex; flex-direction: column; position: static; border-radius: 14px; overflow: hidden }
 .pal-input { display: flex; align-items: center; gap: 10px; padding: 0 16px; height: 50px; border-bottom: 1px solid var(--border); color: var(--muted); flex: none }
 #q { flex: 1; min-width: 0; font-size: 15px; color: var(--fg) }
@@ -303,6 +317,28 @@ button.tag-chip { padding: 0 10px }
 .cmd .snip b { color: var(--fg); font-weight: 500 }
 .pal-foot { display: flex; gap: 14px; padding: 8px 16px; border-top: 1px solid var(--border); color: var(--faint); font-size: 12px; flex: none; font-variant-numeric: tabular-nums }
 .pal-foot span:last-child { margin-left: auto }
+/* settings */
+#settings { position: static; width: 100%; max-width: 520px; max-height: 76vh; display: flex; flex-direction: column; border-radius: 14px; overflow: hidden; animation: rise-in .16s var(--ease) }
+#settings header { display: flex; align-items: center; justify-content: space-between; padding: 12px 12px 8px 20px; flex: none }
+#settings h2 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.01em }
+#settings-body { overflow-y: auto; padding: 0 20px 18px }
+#settings section { padding: 10px 0 6px; border-top: 1px solid var(--border) }
+#settings section:first-child { border-top: 0 }
+#settings h3 { margin: 4px 0 4px; font-size: 12px; font-weight: 500; color: var(--muted) }
+.s-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 44px; padding: 4px 0 }
+.s-row > div { min-width: 0 }
+.s-row b { display: block; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.s-row small { display: block; color: var(--faint); font-size: 12.5px; line-height: 1.4 }
+.s-row .seg { flex: none }
+.s-row .seg button { height: 26px; padding: 0 11px; font-size: 12.5px }
+.s-note { margin: 2px 0 6px; color: var(--faint); font-size: 12.5px; line-height: 1.5 }
+.s-note code { font: 11.5px var(--mono); padding: 1px 4px; background: var(--subtle); border-radius: 4px; color: var(--muted) }
+.s-keys { display: grid; grid-template-columns: 1fr auto; gap: 8px 16px; align-items: center; padding: 6px 0 4px; color: var(--muted); font-size: 13px }
+.s-keys .kbd { justify-self: end }
+.switch { position: relative; width: 36px; height: 22px; flex: none; border-radius: 99px; background: var(--border); transition: background-color .15s ease }
+.switch i { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--bg); box-shadow: 0 1px 2px rgb(0 0 0 / .2); transition: transform .15s var(--ease) }
+.switch.on { background: var(--fg) }
+.switch.on i { transform: translateX(14px) }
 #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 70; display: flex; align-items: center; gap: 12px; padding: 9px 14px; background: var(--fg); color: var(--bg); border-radius: 10px; font-size: 13px; max-width: calc(100% - 32px) }
 #toast button { font-weight: 600; text-decoration: underline; text-underline-offset: 2px }
 .txt-btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border-radius: 8px; color: var(--muted); font-size: 13px; flex: none }
@@ -331,7 +367,9 @@ button.tag-chip { padding: 0 10px }
   #home h1 { font-size: 24px }
   #page { padding-block: 2vh 30vh }
   #pal { max-height: 80vh }
-  #veil { padding-top: 8vh }
+  #veil, .veil { padding-top: 8vh }
+  #settings { max-height: 84vh }
+  .s-row { flex-wrap: wrap; gap: 6px 16px }
 }
 /* motion: short, and only opacity and transform. The editor itself never animates. */
 .icon, .row, .note-link, .f-row, .f-act, .hit, .cmd, .ctx, #crumb, #send, .tab, .tag-chip button { transition: background-color .12s ease, color .12s ease, opacity .12s ease }

@@ -34,10 +34,10 @@ Spec: "Vault: Build Specification" (Nov 2026). Product brief from the owner: loo
   Folder moves use `rename_folder`, which now refuses moving a folder inside itself.
 - **Graph scopes are named "This note" / "All notes"** instead of Local / Global; switching reloads
   only the canvas and the toolbar keeps its size.
-- **Slash menu** shows a plain icon and label per block (no raw Markdown syntax) and forces
+- **Slash menu** shows an icon tile and a plain label per block (no raw Markdown syntax) and forces
   the app font over CodeMirror's monospace tooltip default.
 - **Settings** sheet from the sidebar's bottom-left (⌘,): theme, text size, line width, spell check,
-  folder note counts, vault rescan. UI-only preferences in `localStorage`
+  folder note counts, vault rescan, shortcuts. UI-only preferences in `localStorage`
   (`cera.settings`), applied before first paint; nothing is written to the vault or `.obsidian/`.
 
 ## Engine

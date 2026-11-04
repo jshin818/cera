@@ -123,7 +123,7 @@ function noteList(notes, depthClass = '') {
 
 function folderRow(d, depth) {
   const open = openFolders.has(d.path);
-  return `<div class="f-row${open ? ' open' : ''}" data-folder="${esc(d.path)}" role="treeitem" aria-expanded="${open}" tabindex="0" style="padding-left:${6 + depth * 12}px">
+  return `<div class="f-row${open ? ' open' : ''}" data-folder="${esc(d.path)}" draggable="true" role="treeitem" aria-expanded="${open}" tabindex="0" style="padding-left:${6 + depth * 12}px">
     ${SVG(ICON.chev, 'ic chev')}${SVG(ICON.folder, 'ic fold')}<span class="f-name">${esc(d.name)}</span>
     <span class="f-count">${d.notes ? fmt(d.notes) : ''}</span>
     <button class="f-act" data-act="more" aria-label="Folder actions" title="More">${SVG(ICON.more)}</button></div>`;
@@ -193,24 +193,94 @@ function toggleFolder(path) {
   renderSidebar(false);
 }
 
-/* drag notes onto folders to move them */
+/* drag and drop: notes and folders move onto a folder, into an open folder's contents, or onto
+   empty space in the tree (the top level). Hovering a closed folder while dragging opens it. */
+const NOTE_T = 'text/x-cera-path', FOLDER_T = 'text/x-cera-folder';
+let dragging = null;     // { kind: 'note' | 'folder', path }
+let dropEl = null;
+let springT = null;
+function dropTargetAt(el) {
+  const row = el.closest('.f-row[data-folder]');
+  if (row) return { el: row, folder: row.dataset.folder };
+  const kids = el.closest('.f-kids');
+  if (kids) { const r = kids.parentElement.querySelector(':scope > .f-row'); return { el: r, folder: r.dataset.folder } }
+  return { el: $('notes-pane'), folder: '' };
+}
+function canDrop(folder) {
+  if (!dragging) return false;
+  const p = dragging.path;
+  if (dragging.kind === 'folder') return folder !== p && !folder.startsWith(p + '/') && folder !== folderOf(p);
+  return folder !== folderOf(p);
+}
+function setDropEl(el) {
+  if (dropEl === el) return;
+  dropEl?.classList.remove('drop');
+  dropEl = el;
+  el?.classList.add('drop');
+  clearTimeout(springT);
+  const f = el?.dataset.folder;
+  if (f && !openFolders.has(f)) springT = setTimeout(() => { if (dropEl === el) toggleFolder(f) }, 650);
+}
+function endDrag() {
+  setDropEl(null);
+  document.querySelector('.dragging')?.classList.remove('dragging');
+  $('notes-pane').classList.remove('dragging-in');
+  dragging = null;
+}
 $('side-scroll').addEventListener('dragstart', e => {
   const n = e.target.closest('.note-link[data-path]');
-  if (n) e.dataTransfer.setData('text/x-cera-path', n.dataset.path);
+  const f = !n && e.target.closest('.f-row[data-folder]');
+  if (!n && !f) return;
+  dragging = n ? { kind: 'note', path: n.dataset.path } : { kind: 'folder', path: f.dataset.folder };
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData(n ? NOTE_T : FOLDER_T, dragging.path);
+  e.dataTransfer.setData('text/plain', n ? titleOf(dragging.path) : dragging.path.split('/').pop());
+  (n || f).classList.add('dragging');
+  $('notes-pane').classList.add('dragging-in');
 });
 $('side-scroll').addEventListener('dragover', e => {
-  const row = e.target.closest('.f-row, .f-head');
-  if (row && e.dataTransfer.types.includes('text/x-cera-path')) { e.preventDefault(); row.classList.add('drop') }
-});
-$('side-scroll').addEventListener('dragleave', e => e.target.closest('.f-row, .f-head')?.classList.remove('drop'));
-$('side-scroll').addEventListener('drop', async e => {
-  const row = e.target.closest('.f-row, .f-head');
-  const path = e.dataTransfer.getData('text/x-cera-path');
-  row?.classList.remove('drop');
-  if (!row || !path) return;
+  if (!dragging) return;
+  const t = dropTargetAt(e.target);
+  if (!canDrop(t.folder)) { e.dataTransfer.dropEffect = 'none'; setDropEl(null); return }
   e.preventDefault();
-  moveNote(path, row.dataset.folder || '');
+  e.dataTransfer.dropEffect = 'move';
+  setDropEl(t.el);
 });
+$('side-scroll').addEventListener('dragleave', e => { if (!$('side-scroll').contains(e.relatedTarget)) setDropEl(null) });
+$('side-scroll').addEventListener('dragend', endDrag);
+$('side-scroll').addEventListener('drop', e => {
+  if (!dragging) return;
+  e.preventDefault();
+  const t = dropTargetAt(e.target);
+  const d = dragging;
+  const ok = canDrop(t.folder);
+  endDrag();
+  if (!ok) return;
+  if (d.kind === 'note') moveNote(d.path, t.folder); else moveFolder(d.path, t.folder);
+});
+
+async function moveFolder(path, into) {
+  const name = path.split('/').pop();
+  const to = into ? `${into}/${name}` : name;
+  try {
+    const r = await api.renameFolder(path, to);
+    retargetFolder(path, r.path);
+    if (into) openFolders.add(into);
+    store.set('cera.openFolders', [...openFolders]);
+    refreshSidebar();
+    toast(`Moved “${name}” to ${into ? into.split('/').pop() : 'the top level'}`);
+  } catch (e) { fail(e) }
+}
+// After a folder moves or is renamed, keep open folders, tabs and the open note pointing at it.
+function retargetFolder(from, to) {
+  const swap = p => (p === from || p.startsWith(from + '/') ? to + p.slice(from.length) : p);
+  for (const p of [...openFolders]) { const q = swap(p); if (q !== p) { openFolders.delete(p); openFolders.add(q) } }
+  ws.tabs = ws.tabs.map(swap);
+  if (ws.last) ws.last = swap(ws.last);
+  saveWs();
+  renderTabs();
+  if (cur) { const q = swap(cur.path); if (q !== cur.path) { cur.path = q; renderCrumb() } }
+}
 
 async function moveNote(path, folder) {
   const name = path.split('/').pop();
@@ -221,7 +291,7 @@ async function moveNote(path, folder) {
     retargetTabs(path, r.path);
     if (cur?.path === path) { cur.path = r.path; renderCrumb() }
     refreshSidebar();
-    toast(`Moved to ${folder || 'the top level'}`);
+    toast(`Moved to ${folder ? folder.split('/').pop() : 'the top level'}`);
   } catch (e) { fail(e) }
 }
 
@@ -245,8 +315,10 @@ $('fm-rename').onclick = () => {
   const parent = folderOf(menuFolder);
   inlineFolderName(parent, menuFolder.split('/').pop(), async name => {
     const to = parent ? `${parent}/${name}` : name;
-    await api.renameFolder(menuFolder, to);
-    if (openFolders.delete(menuFolder)) openFolders.add(to);
+    const from = menuFolder;
+    await api.renameFolder(from, to);
+    retargetFolder(from, to);
+    store.set('cera.openFolders', [...openFolders]);
   }, menuFolder);
 };
 $('fm-del').onclick = async () => {

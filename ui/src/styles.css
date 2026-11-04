@@ -136,7 +136,7 @@ button.tag-chip { padding: 0 10px }
 body.no-counts .f-count { display: none }
 .f-row { display: flex; align-items: center; gap: 7px; min-height: 34px; padding: 3px 4px 3px 6px; border-radius: 8px; cursor: pointer; user-select: none }
 .f-row:hover { background: var(--hover) }
-.f-row.drop { background: var(--subtle); box-shadow: inset 0 0 0 1.5px var(--honey) }
+.f-row.drop { background: color-mix(in srgb, var(--honey) 14%, transparent); box-shadow: inset 0 0 0 1.5px var(--honey) }
 .f-row .chev { width: 14px; height: 14px; color: var(--faint); transition: transform .12s }
 .f-row.open .chev { transform: rotate(90deg) }
 .f-row .ic.fold { color: var(--fg) }

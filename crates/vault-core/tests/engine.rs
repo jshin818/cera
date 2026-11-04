@@ -190,3 +190,22 @@ fn snapshot_reopen_skips_reparse() {
     assert_eq!(e.search_text("programmer", 5).unwrap().len(), 1);
     e.shutdown();
 }
+
+#[test]
+fn move_folder_into_another_folder() {
+    let d = sample();
+    let e = open(d.path(), false);
+    // drag "Projects" into "Archive": the folder moves with its notes
+    let to = e.rename_folder("Projects", "Archive/Projects").unwrap();
+    assert_eq!(to, "Archive/Projects");
+    assert!(d.path().join("Archive/Projects/Beta.md").exists());
+    assert!(!d.path().join("Projects").exists());
+    e.flush();
+    let l = e.list_dir("Archive");
+    assert!(l.dirs.iter().any(|x| x.path == "Archive/Projects"), "moved folder is listed under its new parent");
+    // a folder can't be dropped inside itself
+    assert!(matches!(e.rename_folder("Archive", "Archive/Projects/Archive"), Err(vault_core::CoreError::Invalid(_))));
+    // and won't overwrite an existing folder
+    assert!(matches!(e.rename_folder("Archive/Projects", "People"), Err(vault_core::CoreError::Exists(_))));
+    e.shutdown();
+}

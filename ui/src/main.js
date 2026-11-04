@@ -1135,6 +1135,7 @@ const toggle = (key, on, label) => `<button class="switch${on ? ' on' : ''}" rol
 const srow = (label, hint, control) => `<div class="s-row"><div><b>${label}</b>${hint ? `<small>${hint}</small>` : ''}</div>${control}</div>`;
 function renderSettings() {
   const st = status || {};
+  const keys = [['⌘K', 'Find a note'], ['⌘N', 'New note'], ['⌘P', 'Commands'], ['⌘G', 'Graph of this note'], ['⌘\\', 'Toggle sidebar'], ['⌘,', 'Settings']];
   $('settings-body').innerHTML = `
     <section><h3>Appearance</h3>
       ${srow('Theme', '', seg('theme', theme, [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']]))}
@@ -1142,13 +1143,17 @@ function renderSettings() {
     <section><h3>Editor</h3>
       ${srow('Text size', '', seg('size', settings.size, [['small', 'Small'], ['default', 'Default'], ['large', 'Large']]))}
       ${srow('Line width', '', seg('width', settings.width, [['narrow', 'Narrow'], ['default', 'Default'], ['wide', 'Wide']]))}
-      ${srow('Spell check', '', toggle('spellcheck', settings.spellcheck, 'Spell check'))}
+      ${srow('Spell check', 'Underline misspelled words while you write', toggle('spellcheck', settings.spellcheck, 'Spell check'))}
     </section>
     <section><h3>Sidebar</h3>
-      ${srow('Note counts', '', toggle('counts', settings.counts, 'Note counts'))}
+      ${srow('Note counts', 'Show how many notes each folder holds', toggle('counts', settings.counts, 'Note counts'))}
     </section>
     <section><h3>Vault</h3>
-      ${srow(esc(vaultName), `${fmt(st.notes || 0)} notes`, `<button class="btn quiet" id="s-rescan">Rescan</button>`)}
+      ${srow(esc(vaultName), `${fmt(st.notes || 0)} notes · ${st.ready ? (st.embedding_pending ? `embedding ${fmt(st.embedding_pending)}` : 'up to date') : 'indexing…'}`, `<button class="btn quiet" id="s-rescan">Rescan</button>`)}
+      <p class="s-note">Your notes are plain Markdown files in this folder. Search data lives in <code>.vault/</code> and can be rebuilt at any time.</p>
+    </section>
+    <section><h3>Keyboard</h3>
+      <div class="s-keys">${keys.map(([k, l]) => `<span>${l}</span><span class="kbd">${esc(k)}</span>`).join('')}</div>
     </section>`;
 }
 function openSettings() {

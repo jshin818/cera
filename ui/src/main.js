@@ -172,19 +172,21 @@ function markActiveInSidebar() {
 }
 
 $('side-scroll').addEventListener('click', async e => {
+  if (e.target.closest('#f-edit')) return; // typing a folder name, not navigating
   const note = e.target.closest('.note-link[data-path]');
   if (note) { openNote(note.dataset.path, { newTab: e.metaKey || e.ctrlKey }); if (mobile()) setSide(false); return }
   const act = e.target.closest('[data-act="more"]');
-  const row = e.target.closest('.f-row');
+  const row = e.target.closest('.f-row[data-folder]');
   if (act && row) { e.stopPropagation(); return folderMenu(row.dataset.folder, act) }
   if (row) toggleFolder(row.dataset.folder);
 });
 $('side-scroll').addEventListener('keydown', e => {
   const row = e.target.closest('.f-row');
-  if (row && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggleFolder(row.dataset.folder) }
+  if (row?.dataset.folder !== undefined && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggleFolder(row.dataset.folder) }
 });
 
 function toggleFolder(path) {
+  if (path === undefined) return;
   if (openFolders.has(path)) {
     [...openFolders].filter(p => p === path || p.startsWith(path + '/')).forEach(p => openFolders.delete(p));
   } else {

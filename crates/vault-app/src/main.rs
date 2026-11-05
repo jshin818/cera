@@ -75,6 +75,11 @@ fn main() -> anyhow::Result<()> {
                 .title(&title)
                 .inner_size(1280.0, 820.0)
                 .min_inner_size(720.0, 480.0)
+                // Tauri's native file-drop handler claims every drag (wry answers NSDragOperationCopy
+                // without passing it to WebKit), so the page never gets dragover/drop and the
+                // sidebar's HTML5 drag and drop silently does nothing. Cera doesn't take OS file
+                // drops, so hand drags to the web view.
+                .disable_drag_drop_handler()
                 .build()?;
             let _ = window.set_focus();
             Ok(())

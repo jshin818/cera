@@ -135,6 +135,7 @@ function folderRow(d, depth) {
 async function renderFolder(container, path, depth) {
   const l = await listing(path);
   container.innerHTML = '';
+  const sub = []; // open subfolders load in parallel; resolve once the whole open tree is drawn
   for (const d of l.dirs) {
     const holder = document.createElement('div');
     holder.innerHTML = folderRow(d, depth);
@@ -143,7 +144,7 @@ async function renderFolder(container, path, depth) {
       const kids = document.createElement('div');
       kids.className = 'f-kids';
       holder.append(kids);
-      renderFolder(kids, d.path, depth + 1);
+      sub.push(renderFolder(kids, d.path, depth + 1));
     }
   }
   // One tree: every level, the top level included, lists its folders first and then its notes.
@@ -158,6 +159,7 @@ async function renderFolder(container, path, depth) {
     nl.style.paddingLeft = 10 + depth * 12 + 'px';
     container.append(nl);
   }
+  await Promise.all(sub);
 }
 
 async function renderSidebar(fresh) {

@@ -164,8 +164,11 @@ async function renderFolder(container, path, depth) {
   await Promise.all(sub);
 }
 
+// While a folder name is being typed, re-rendering would destroy the input; defer until it closes.
+let nameEditing = false, renderDeferred = false;
 async function renderSidebar(fresh) {
   if (fresh) dirCache.clear();
+  if (nameEditing) { renderDeferred = true; return }
   try { await renderFolder($('f-list'), '', 0) } catch (e) { /* engine still starting */ }
 }
 const refreshSidebar = debounce(() => renderSidebar(true), 250);
@@ -357,13 +360,13 @@ function folderMenu(path, anchor) {
   place($('fmenu'), anchor);
 }
 $('fm-note').onclick = () => { $('fmenu').hidden = true; newNote(menuFolder) };
-$('fm-sub').onclick = () => { $('fmenu').hidden = true; inlineFolderName(menuFolder, '', async name => { await api.mkdir(`${menuFolder}/${name}`); openFolders.add(menuFolder) }) };
+$('fm-sub').onclick = () => { $('fmenu').hidden = true; createFolderIn(menuFolder) };
 $('fm-rename').onclick = () => {
   $('fmenu').hidden = true;
   const parent = folderOf(menuFolder);
-  inlineFolderName(parent, menuFolder.split('/').pop(), async name => {
+  const from = menuFolder;
+  inlineFolderName(from.split('/').pop(), async name => {
     const to = parent ? `${parent}/${name}` : name;
-    const from = menuFolder;
     await api.renameFolder(from, to);
     retargetFolder(from, to);
     store.set('cera.openFolders', [...openFolders]);
@@ -375,26 +378,53 @@ $('fm-del').onclick = async () => {
   if (activeFolder === p || activeFolder.startsWith(p + '/')) setActiveFolder(folderOf(p));
   try { await api.delFolder(p); toast(`Moved “${p.split('/').pop()}” to the vault's .trash folder`); refreshSidebar() } catch (e) { fail(e) }
 };
-$('f-add').onclick = () => inlineFolderName('', '', name => api.mkdir(name));
+$('f-add').onclick = () => createFolderIn(targetFolder());
 
-// Inline name editor that appears in the folder list.
-function inlineFolderName(parent, initial, done, replacing) {
+// New folder, Finder-style: create "New folder" (or "New folder 2", ...) inside `parent` right away,
+// show it, then let the user rename it in place. Clicking away keeps the folder with its name.
+async function createFolderIn(parent) {
+  try {
+    const l = await listing(parent, true);
+    const taken = new Set(l.dirs.map(d => d.name.toLowerCase()));
+    let name = 'New folder';
+    for (let i = 2; taken.has(name.toLowerCase()); i++) name = `New folder ${i}`;
+    const path = parent ? `${parent}/${name}` : name;
+    await api.mkdir(path);
+    revealFolder(parent);
+    setActiveFolder(parent);
+    await renderSidebar(true);
+    inlineFolderName(name, async newName => {
+      const to = parent ? `${parent}/${newName}` : newName;
+      await api.renameFolder(path, to);
+      retargetFolder(path, to);
+    }, path);
+  } catch (e) { fail(e) }
+}
+
+// Inline name editor that takes the place of a folder row.
+function inlineFolderName(initial, done, replacing) {
+  const target = document.querySelector(`#f-list .f-row[data-folder="${CSS.escape(replacing)}"]`);
+  if (!target) return;
   const row = document.createElement('div');
-  row.className = 'f-row';
+  row.className = 'f-row f-editing';
+  row.style.paddingLeft = target.style.paddingLeft;
   row.innerHTML = `${SVG(ICON.folder, 'ic fold')}<input id="f-edit" maxlength="120" aria-label="Folder name">`;
-  const target = replacing ? document.querySelector(`.f-row[data-folder="${CSS.escape(replacing)}"]`) : null;
-  if (target) target.replaceWith(row); else $('f-list').prepend(row);
+  target.replaceWith(row);
+  row.scrollIntoView({ block: 'nearest' });
   const inp = row.querySelector('input');
   inp.value = initial;
   inp.focus();
   inp.select();
+  nameEditing = true;
   let finished = false;
   const finish = async ok => {
     if (finished) return;
     finished = true;
     const name = inp.value.trim().replace(/[\\/:*?"<>|]/g, ' ').trim();
     if (ok && name && name !== initial) { try { await done(name) } catch (e) { fail(e) } }
-    refreshSidebar();
+    nameEditing = false;
+    renderDeferred = false;
+    renderSidebar(true);
   };
   inp.onkeydown = e => { if (e.key === 'Enter') finish(true); if (e.key === 'Escape') finish(false) };
   inp.onblur = () => finish(true);

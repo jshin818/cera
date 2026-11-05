@@ -101,7 +101,7 @@ const ROW_H = 31;
 function noteList(notes, depthClass = '') {
   const wrap = document.createElement('div');
   wrap.className = 'f-notes ' + depthClass;
-  const row = n => `<button class="note-link${n.markdown ? '' : ' file'}${cur?.path === n.path ? ' on' : ''}" data-path="${esc(n.path)}" draggable="${n.markdown}" title="${esc(n.path)}">${esc(n.markdown ? n.title : n.path.split('/').pop())}</button>`;
+  const row = n => `<button class="note-link${n.markdown ? '' : ' file'}${cur?.path === n.path ? ' on' : ''}" data-path="${esc(n.path)}" draggable="true" title="${esc(n.path)}">${esc(n.markdown ? n.title : n.path.split('/').pop())}</button>`;
   if (notes.length <= 200) {
     wrap.innerHTML = notes.map(row).join('');
     return wrap;

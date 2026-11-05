@@ -32,6 +32,23 @@ Spec: "Vault: Build Specification" (Nov 2026). Product brief from the owner: loo
 - **Drag and drop everywhere in the tree.** Notes and folders drop onto a folder, into an open
   folder's contents, or onto empty space (top level); hovering a closed folder springs it open.
   Folder moves use `rename_folder`, which now refuses moving a folder inside itself.
+  Attachments are draggable too (`rename` already rewrites links to them).
+- **Desktop shell disables Tauri's drag-drop handler** (`disable_drag_drop_handler`). With it on,
+  wry answers every macOS drag itself (NSDragOperationCopy, the green "+") and never forwards it to
+  WebKit, so HTML5 drag and drop in the sidebar did nothing in the app while working in browsers.
+  Cēra doesn't use OS file drops through Tauri, so nothing is lost.
+- **"Current folder" decides where new things go** (owner request, Nov 2026). Opening a folder or
+  clicking a note inside one makes that folder current; clicking a top-level note or empty space in
+  the tree makes the top level current; closing a folder hands it to its parent. It only counts
+  while open (else the nearest open ancestor). New note (button, ⌘N, home box, ⌘K create) and New
+  folder use it; following a link to a missing note still creates it next to the linking note
+  (Obsidian behaviour). The current folder's icon is honey. Stored in `localStorage`
+  (`cera.activeFolder`).
+- **New folder is Finder-style:** it is created at once as "New folder" (or "New folder 2", …)
+  inside the current folder and opens in rename mode; Enter/blur keeps the typed name, Escape keeps
+  "New folder". Previously an empty name box appeared at the top of the tree and clicking away
+  silently cancelled. Sidebar re-renders are deferred while a name box is open so live updates
+  can't wipe it, and `renderFolder` now resolves only after open subfolders are drawn.
 - **Graph scopes are named "This note" / "All notes"** instead of Local / Global; switching reloads
   only the canvas and the toolbar keeps its size.
 - **Slash menu** shows an icon tile and a plain label per block (no raw Markdown syntax) and forces

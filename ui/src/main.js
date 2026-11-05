@@ -22,6 +22,8 @@ let exView = null;         // { kind, arg }
 let status = {};
 const dirCache = new Map(); // folder path -> listing
 const openFolders = new Set(store.get('cera.openFolders', []));
+// The folder the user is "in": new notes and folders are created here. '' is the top level.
+let activeFolder = store.get('cera.activeFolder', '');
 let tagsCache = null;
 let vaultName = 'All notes';
 
@@ -126,7 +128,7 @@ function noteList(notes, depthClass = '') {
 
 function folderRow(d, depth) {
   const open = openFolders.has(d.path);
-  return `<div class="f-row${open ? ' open' : ''}" data-folder="${esc(d.path)}" draggable="true" role="treeitem" aria-expanded="${open}" tabindex="0" style="padding-left:${6 + depth * 12}px">
+  return `<div class="f-row${open ? ' open' : ''}${d.path === targetFolder() ? ' here' : ''}" data-folder="${esc(d.path)}" draggable="true" role="treeitem" aria-expanded="${open}" tabindex="0" style="padding-left:${6 + depth * 12}px">
     ${SVG(ICON.chev, 'ic chev')}${SVG(ICON.folder, 'ic fold')}<span class="f-name">${esc(d.name)}</span>
     <span class="f-count">${d.notes ? fmt(d.notes) : ''}</span>
     <button class="f-act" data-act="more" aria-label="Folder actions" title="More">${SVG(ICON.more)}</button></div>`;
@@ -168,6 +170,38 @@ async function renderSidebar(fresh) {
 }
 const refreshSidebar = debounce(() => renderSidebar(true), 250);
 
+/* ---------- current folder: where new notes and folders go ---------- */
+// The active folder counts only while it (and so every ancestor) is open in the tree;
+// otherwise the nearest open ancestor is used, and failing that the top level.
+function targetFolder() {
+  let f = activeFolder;
+  while (f && !openFolders.has(f)) f = folderOf(f);
+  return f;
+}
+function setActiveFolder(f) {
+  activeFolder = f || '';
+  store.set('cera.activeFolder', activeFolder);
+  const t = targetFolder();
+  document.querySelectorAll('#f-list .f-row.here').forEach(r => r.classList.remove('here'));
+  if (t) document.querySelector(`#f-list .f-row[data-folder="${CSS.escape(t)}"]`)?.classList.add('here');
+}
+// Which folder a point in the tree belongs to: a folder row, anything inside an open folder's
+// contents, or (everywhere else) the top level.
+function folderAt(el) {
+  const note = el.closest('.note-link[data-path]');
+  if (note) return folderOf(note.dataset.path);
+  const row = el.closest('.f-row[data-folder]');
+  if (row) return row.dataset.folder;
+  const kids = el.closest('.f-kids');
+  if (kids) return kids.parentElement.querySelector(':scope > .f-row[data-folder]')?.dataset.folder ?? '';
+  return '';
+}
+// Open a folder and all its ancestors so something created inside it is visible.
+function revealFolder(f) {
+  for (let p = f; p; p = folderOf(p)) openFolders.add(p);
+  store.set('cera.openFolders', [...openFolders]);
+}
+
 function markActiveInSidebar() {
   document.querySelectorAll('#side .note-link.on').forEach(b => b.classList.remove('on'));
   if (cur) document.querySelectorAll(`#side .note-link[data-path="${CSS.escape(cur.path)}"]`).forEach(b => b.classList.add('on'));
@@ -176,11 +210,13 @@ function markActiveInSidebar() {
 $('side-scroll').addEventListener('click', async e => {
   if (e.target.closest('#f-edit')) return; // typing a folder name, not navigating
   const note = e.target.closest('.note-link[data-path]');
-  if (note) { openNote(note.dataset.path, { newTab: e.metaKey || e.ctrlKey }); if (mobile()) setSide(false); return }
+  if (note) { setActiveFolder(folderOf(note.dataset.path)); openNote(note.dataset.path, { newTab: e.metaKey || e.ctrlKey }); if (mobile()) setSide(false); return }
   const act = e.target.closest('[data-act="more"]');
   const row = e.target.closest('.f-row[data-folder]');
   if (act && row) { e.stopPropagation(); return folderMenu(row.dataset.folder, act) }
-  if (row) toggleFolder(row.dataset.folder);
+  if (row) return toggleFolder(row.dataset.folder);
+  // Empty space in the tree (or an open folder's "Empty" line): that is where you now are.
+  if (e.target.closest('#notes-pane')) setActiveFolder(folderAt(e.target));
 });
 $('side-scroll').addEventListener('keydown', e => {
   const row = e.target.closest('.f-row');
@@ -191,12 +227,16 @@ function toggleFolder(path) {
   if (path === undefined) return;
   if (openFolders.has(path)) {
     [...openFolders].filter(p => p === path || p.startsWith(path + '/')).forEach(p => openFolders.delete(p));
+    // Closing the folder you are in (or one around it) puts you in its parent.
+    if (activeFolder === path || activeFolder.startsWith(path + '/')) activeFolder = folderOf(path);
   } else {
     // Only one main folder open at a time; nested folders open freely inside it.
     if (!path.includes('/')) [...openFolders].filter(p => !p.startsWith(path + '/')).forEach(p => openFolders.delete(p));
     openFolders.add(path);
+    activeFolder = path; // opening a folder means you are now inside it
   }
   store.set('cera.openFolders', [...openFolders]);
+  store.set('cera.activeFolder', activeFolder);
   renderSidebar(false);
 }
 
@@ -282,6 +322,7 @@ async function moveFolder(path, into) {
 function retargetFolder(from, to) {
   const swap = p => (p === from || p.startsWith(from + '/') ? to + p.slice(from.length) : p);
   for (const p of [...openFolders]) { const q = swap(p); if (q !== p) { openFolders.delete(p); openFolders.add(q) } }
+  if (activeFolder) { activeFolder = swap(activeFolder); store.set('cera.activeFolder', activeFolder) }
   ws.tabs = ws.tabs.map(swap);
   if (ws.last) ws.last = swap(ws.last);
   saveWs();
@@ -331,6 +372,7 @@ $('fm-rename').onclick = () => {
 $('fm-del').onclick = async () => {
   $('fmenu').hidden = true;
   const p = menuFolder;
+  if (activeFolder === p || activeFolder.startsWith(p + '/')) setActiveFolder(folderOf(p));
   try { await api.delFolder(p); toast(`Moved “${p.split('/').pop()}” to the vault's .trash folder`); refreshSidebar() } catch (e) { fail(e) }
 };
 $('f-add').onclick = () => inlineFolderName('', '', name => api.mkdir(name));
@@ -449,7 +491,7 @@ async function capture() {
   const title = first.replace(/^#+\s*/, '').slice(0, 100);
   const body = rest.join('\n').trim();
   try {
-    const r = await api.create('', title, body ? body + '\n' : '');
+    const r = await api.create(targetFolder(), title, body ? body + '\n' : '');
     $('capture').value = '';
     refreshSidebar();
     openNote(r.path, { focusEnd: true });
@@ -861,9 +903,11 @@ const saveWs = debounce(() => api.workspace(ws).catch(() => {}), 300);
 
 /* ---------- new note ---------- */
 async function newNote(folder) {
-  const f = folder ?? (cur ? folderOf(cur.path) : '');
+  const f = folder ?? targetFolder();
   try {
     const r = await api.create(f, 'Untitled', '');
+    revealFolder(f);
+    setActiveFolder(f);
     refreshSidebar();
     await openNote(r.path, { newTab: false });
     $('title').focus();
@@ -956,7 +1000,7 @@ function runRow(r, newTab) {
   if (!r) return;
   closePal();
   if (r.kind === 'cmd') return r.run();
-  if (r.kind === 'create') return api.create(cur ? folderOf(cur.path) : '', r.q, '').then(x => { refreshSidebar(); openNote(x.path, { newTab, focusEnd: true }) }).catch(fail);
+  if (r.kind === 'create') return api.create(targetFolder(), r.q, '').then(x => { refreshSidebar(); openNote(x.path, { newTab, focusEnd: true }) }).catch(fail);
   openNote(r.path, { newTab });
 }
 $('q').addEventListener('input', () => { palSel = 0; runPal() });

@@ -144,6 +144,8 @@ body.no-counts .f-count { display: none }
 .f-row .chev { width: 14px; height: 14px; color: var(--faint); transition: transform .12s }
 .f-row.open .chev { transform: rotate(90deg) }
 .f-row .ic.fold { color: var(--fg) }
+/* the folder you are in: new notes and folders are created here */
+.f-row.here .ic.fold { color: var(--honey) }
 .f-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
 .f-act { display: none; width: 26px; height: 26px; border-radius: 6px; place-items: center; color: var(--muted) }
 .f-act:hover { background: var(--border); color: var(--fg) }

@@ -24,7 +24,7 @@ jobs:
   # gate is relative: a >10% p95 regression against the committed baseline fails the job.
   # Point `runs-on` at a self-hosted M5 runner to enforce the absolute budgets.
   bench:
-    runs-on: macos-14
+    runs-on: macos-15
     needs: check
     steps:
       - uses: actions/checkout@v4
@@ -43,7 +43,7 @@ jobs:
           path: bench.json
 
   app:
-    runs-on: macos-14
+    runs-on: macos-15
     needs: check
     steps:
       - uses: actions/checkout@v4

@@ -4,6 +4,10 @@
 //! Every engine call runs on tokio's blocking pool, so request handling never stalls on I/O.
 //! When a token is set, `/api/*` and `/file/*` require it (cookie set by `/?t=<token>`, or the
 //! `x-vault-token` header), so other local processes can't read the vault through the port.
+//! `/mcp` is the Model Context Protocol endpoint for AI agents (see [`mcp`]); it also accepts
+//! `Authorization: Bearer <token>`.
+
+pub mod mcp;
 
 use axum::body::Body;
 use axum::extract::{Query, State};
@@ -119,6 +123,7 @@ pub fn router(engine: Engine, token: Option<String>) -> Router {
         .route("/api/rescan", post(rescan))
         .route("/api/events", get(events))
         .route("/file/{*path}", get(file))
+        .route("/mcp", post(mcp_post).get(|| async { StatusCode::METHOD_NOT_ALLOWED }))
         .layer(middleware::from_fn_with_state(state.clone(), auth));
     Router::new().merge(api).route("/", get(index)).route("/{*path}", get(asset)).layer(tower_http::compression::CompressionLayer::new()).with_state(state)
 }
@@ -127,6 +132,7 @@ async fn auth(State(app): State<App>, req: Request<Body>, next: Next) -> Respons
     if let Some(tok) = &app.token {
         let headers = req.headers();
         let ok = headers.get("x-vault-token").and_then(|v| v.to_str().ok()) == Some(tok)
+            || headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")) == Some(tok)
             || headers
                 .get_all(header::COOKIE)
                 .iter()
@@ -446,5 +452,27 @@ async fn file(State(app): State<App>, axum::extract::Path(path): axum::extract::
     match tokio::fs::read(&p).await {
         Ok(bytes) => (StatusCode::OK, [(header::CONTENT_TYPE, mime_for(&path)), (header::CACHE_CONTROL, "no-cache")], bytes).into_response(),
         Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// MCP over Streamable HTTP, answering every request with a single JSON response. Writes are
+/// offered only when the client sends `x-vault-mcp-write: 1`.
+async fn mcp_post(State(app): State<App>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
+    // DNS-rebinding guard: a browser page from another site may not talk to the endpoint.
+    if let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok())
+        && !["http://127.0.0.1", "http://localhost", "http://[::1]"].iter().any(|o| origin == *o || origin.starts_with(&format!("{o}:")))
+    {
+        return (StatusCode::FORBIDDEN, "origin not allowed").into_response();
+    }
+    let msg: Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => return Json(json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": format!("parse error: {e}")}})).into_response(),
+    };
+    let write = headers.get("x-vault-mcp-write").and_then(|v| v.to_str().ok()) == Some("1");
+    let m = mcp::Mcp::new(app.engine.clone(), write);
+    match tokio::task::spawn_blocking(move || m.handle(&msg)).await {
+        Ok(Some(reply)) => Json(reply).into_response(),
+        Ok(None) => StatusCode::ACCEPTED.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

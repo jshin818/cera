@@ -1,6 +1,7 @@
 //! `vault` — headless CLI over vault-core (Phase 0 deliverable) plus `serve` for the desktop UI.
 
 mod bench;
+mod mcp;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -69,6 +70,14 @@ enum Cmd {
         #[arg(long)]
         open: bool,
     },
+    /// Let AI agents use the vault over MCP (stdio). Uses the running Cēra app when it has the vault open
+    Mcp {
+        /// Vault folder; may be omitted while the Cēra app is running
+        vault: Option<PathBuf>,
+        /// Also offer create_note and append_to_note (new notes go to Inbox/)
+        #[arg(long)]
+        write: bool,
+    },
     #[command(hide = true)]
     FirstFrame { vault: PathBuf },
     #[command(hide = true)]
@@ -102,6 +111,7 @@ fn main() -> Result<()> {
         }
     };
     match cli.cmd {
+        Cmd::Mcp { vault, write } => mcp::run(vault, write)?,
         Cmd::FirstFrame { vault } => {
             // Process start -> last note text in memory (the engine opens on the side).
             let (path, content, _) = vault_core::first_frame(&vault).context("no workspace.json with a last note")?;

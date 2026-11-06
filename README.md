@@ -64,6 +64,22 @@ vault bench ~/vault-100k            # Section 8 budgets; --baseline old.json gat
 
 Synthetic vaults for benchmarking: `cargo run --release -p gen-vault -- ~/vault-100k --notes 100000`.
 
+## AI agents (MCP)
+
+Cēra speaks the Model Context Protocol, so agents such as Claude Code, Claude Desktop, Cursor or
+Codex can search and read your notes. Add this to the agent's MCP settings:
+
+```json
+{ "mcpServers": { "cera": { "command": "/path/to/vault", "args": ["mcp"] } } }
+```
+
+While the Cēra app is open, `vault mcp` goes through it; otherwise pass the vault folder
+(`"args": ["mcp", "/Users/you/Notes"]`). Add `"--write"` to let the agent create notes (in
+`Inbox/`) and append to notes. It never deletes or renames, and every write is listed in
+`.vault/agent-log.jsonl`. Tools: `search`, `read_note`, `list_folder`, `recent`, `backlinks`,
+`related`, `tags`, plus `create_note` and `append_to_note` with `--write`. Notes are also
+readable as `cera://note/<path>` resources.
+
 ## Keyboard
 
 | Keys | Action |
@@ -89,7 +105,7 @@ crates/vault-search   tantivy BM25F, nucleo switcher (+frizbee typos), frecency,
 crates/vault-embed    Model2Vec loader, hashed fallback, binary + int8 (mmap) vector index
 crates/vault-graph    CSR graph, PageRank, PPR, Leiden, Adamic-Adar, Aho-Corasick mentions, MinHash, layout
 crates/vault-core     the engine: snapshots, indexer, write path, queries
-crates/vault-server   localhost JSON API + SSE + embedded UI
+crates/vault-server   localhost JSON API + SSE + embedded UI + MCP endpoint for agents
 crates/vault-cli      `vault` binary
 crates/vault-app      Tauri 2 desktop shell
 ui/                   Cēra front end (vanilla JS, CodeMirror 6), built into ui/dist

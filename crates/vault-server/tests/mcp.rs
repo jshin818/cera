@@ -52,6 +52,7 @@ fn handshake_both_revisions() {
     assert_eq!(bad["error"]["code"], -32022);
     assert!(m.handle(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"})).is_none());
     assert_eq!(rpc(&m, "nope", json!({}))["error"]["code"], -32601);
+    assert_eq!(m.handle(&json!([{"jsonrpc": "2.0", "id": 1, "method": "ping"}])).unwrap()["error"]["code"], -32600);
 }
 
 #[test]
@@ -96,6 +97,8 @@ fn resources() {
     let read = rpc(&m, "resources/read", json!({"uri": "cera://note/Projects/Beta.md"}));
     assert!(read["result"]["contents"][0]["text"].as_str().unwrap().contains("We decided to ship"));
     assert_eq!(rpc(&m, "resources/read", json!({"uri": "cera://note/Nope.md"}))["error"]["code"], -32602);
+    assert_eq!(rpc(&m, "resources/read", json!({"uri": "cera://note/assets/diagram.png"}))["error"]["code"], -32602);
+    assert_eq!(rpc(&m, "resources/read", json!({"uri": "cera://note/.vault/agent-log.jsonl"}))["error"]["code"], -32602);
 }
 
 #[test]

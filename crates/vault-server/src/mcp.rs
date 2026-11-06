@@ -43,6 +43,10 @@ impl Mcp {
 
     /// Handle one JSON-RPC message. Returns `None` for notifications (no reply is sent).
     pub fn handle(&self, msg: &Value) -> Option<Value> {
+        // Batches were removed from MCP in 2025-06-18; anything but an object gets an error, not silence.
+        if !msg.is_object() {
+            return Some(json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32600, "message": "invalid request: send one JSON-RPC object per message"}}));
+        }
         let id = msg.get("id").cloned();
         let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
         let params = msg.get("params").cloned().unwrap_or(Value::Null);
@@ -115,7 +119,11 @@ impl Mcp {
             })),
             "resources/read" => {
                 let uri = p.get("uri").and_then(Value::as_str).unwrap_or("");
-                let path = uri.strip_prefix("cera://note/").map(percent_decode).ok_or((-32602, format!("unknown resource {uri}")))?;
+                let path = uri
+                    .strip_prefix("cera://note/")
+                    .map(percent_decode)
+                    .filter(|p| p.to_ascii_lowercase().ends_with(".md"))
+                    .ok_or((-32602, format!("unknown resource {uri}")))?;
                 let n = self.engine.read_note(&path).map_err(|_| (-32602, format!("resource not found: {uri}")))?;
                 Ok(json!({"contents": [{"uri": uri, "mimeType": "text/markdown", "text": n.content}], "ttlMs": 0, "cacheScope": "private"}))
             }

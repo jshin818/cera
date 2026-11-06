@@ -14,7 +14,7 @@
 
 ## Project map
 - `crates/vault-*`: engine (fs, parse, store, search, embed, graph, core), `vault-cli` (`vault`),
-  `vault-server` (localhost API + embedded UI), `vault-app` (Tauri shell, `-p vault-app`).
+  `vault-server` (localhost API + embedded UI + MCP at `/mcp`, see `mcp.rs`), `vault-app` (Tauri shell, `-p vault-app`).
 - `ui/`: Cēra-style front end (vanilla JS + CodeMirror 6). `npm run build` writes `ui/dist`,
   which vault-server embeds at compile time. Commit `ui/dist` after UI changes.
 - `tools/gen-vault`: synthetic vaults. `vault bench <vault>` measures the Section 8 budgets.

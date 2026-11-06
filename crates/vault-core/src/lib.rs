@@ -341,6 +341,11 @@ impl Engine {
         &self.0.root
     }
 
+    /// The vault's cache folder (`.vault/`).
+    pub fn app_dir(&self) -> &Path {
+        &self.0.app_dir
+    }
+
     /// Block until the first walk + index pass has finished (or timeout). Returns readiness.
     pub fn wait_ready(&self, timeout: Duration) -> bool {
         let (m, cv) = &self.0.ready;

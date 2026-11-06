@@ -112,8 +112,37 @@ Spec: "Vault: Build Specification" (Nov 2026). Product brief from the owner: loo
 - **Near-duplicates:** one-permutation MinHash (64 bins, densified), 16×4 LSH bands, intrusive
   linked-list buckets (~16 B per note-band).
 
+## AI agents (MCP)
+
+- **One handler, two transports.** `vault_server::mcp::Mcp::handle` answers JSON-RPC; the running
+  server exposes it at `POST /mcp` (Streamable HTTP, single JSON responses, no SSE) and `vault mcp`
+  speaks it over stdio. Agents need no plugin or copied key.
+- **Hand-written instead of the `rmcp` SDK.** The surface is small (tools, resources, discover), it
+  adds no dependencies, and one handler serves both the stateless 2026-07-28 revision
+  (`server/discover`, `_meta` protocol version, `resultType`, `ttlMs`/`cacheScope`) and the 2025
+  revisions with `initialize`, which most clients still send. rmcp 3.9.0 was a day old when checked.
+  Not built, as 2026-07-28 deprecates them: roots, sampling, logging. Not built yet: subscriptions.
+- **`vault mcp` forwards to the running app.** redb takes an exclusive file lock, so a second process
+  can't open a vault the app has open. The app writes `{url, token, vault, pid}` (mode 0600) to
+  `~/Library/Application Support/Cera/server.json` when its server is listening and removes it on a
+  clean exit; `vault mcp` pings it and forwards when the vault matches, else opens the vault itself.
+  `CERA_DISCOVERY` overrides the file's location. A stale file just fails the ping.
+- **Auth:** `/mcp` sits behind the same token as `/api` and also accepts `Authorization: Bearer`.
+  Requests with a non-localhost `Origin` are refused (DNS rebinding).
+- **Agent-shaped tools.** search, read_note (one heading at a time; 20k-character cap), list_folder,
+  recent, backlinks, related, tags. Notes can be named by path, title or alias. Results carry paths,
+  sections and plain-text excerpts (snippet HTML is stripped).
+- **Writes are opt-in and additive.** `--write` (or `x-vault-mcp-write: 1` over HTTP) adds
+  create_note (default folder `Inbox/`) and append_to_note (to the end, or to a section; a missing
+  heading is created; a list item continues the list). No delete, rename or overwrite. Appends
+  pass the read hash, so a note edited meanwhile is refused instead of clobbered. Each write is
+  appended to `.vault/agent-log.jsonl`; that log is a convenience record, so losing it with the
+  cache loses only history.
+
 ## Not done (later phases)
 
+- Agents: change subscriptions, edit_section and set_properties tools, a write toggle and "what
+  the agent changed" view with undo in Settings, an `.mcpb` bundle, `AGENTS.md` in the vault.
 - Phase 3: EmbeddingGemma upgrade, ColBERT/cross-encoder reranker, YAKE tag keyphrases.
 - Phase 4: WASM plugin host, Dataview-like property queries (frontmatter is already in redb `notes`).
 - Phase 5: Loro sync, BLAKE3 blob store, E2EE relay, iOS shell.

@@ -50,6 +50,7 @@ fn main() -> anyhow::Result<()> {
     let (tx, rx) = mpsc::channel::<String>();
     let token = vault_server::random_token();
     let vault2 = vault.clone();
+    let (token2, vault3) = (token.clone(), vault.clone());
     std::thread::Builder::new().name("vault-server".into()).spawn(move || {
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("tokio runtime");
         let res = rt.block_on(vault_server::serve(vault_server::ServeOptions {
@@ -57,7 +58,11 @@ fn main() -> anyhow::Result<()> {
             addr: "127.0.0.1:0".into(),
             open_browser: false,
             token: Some(token),
-            on_ready: Some(Box::new(move |_addr, url| {
+            on_ready: Some(Box::new(move |addr, url| {
+                // Lets `vault mcp` (AI agents) reach this vault through the running app.
+                if let Err(e) = vault_server::mcp::publish(&format!("http://{addr}"), &token2, &vault3) {
+                    eprintln!("Cera: could not record the server for agents: {e}");
+                }
                 let _ = tx.send(url);
             })),
         }));
@@ -86,5 +91,6 @@ fn main() -> anyhow::Result<()> {
         })
         .run(tauri::generate_context!())
         .map_err(|e| anyhow::anyhow!("tauri: {e}"))?;
+    vault_server::mcp::unpublish();
     Ok(())
 }

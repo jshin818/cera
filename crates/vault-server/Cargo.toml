@@ -19,5 +19,8 @@ rand.workspace = true
 futures-util = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

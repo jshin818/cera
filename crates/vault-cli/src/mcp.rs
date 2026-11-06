@@ -3,6 +3,9 @@
 //! The vault's cache allows one process at a time, so when the Cēra app has the vault open this
 //! forwards each message to the app's `/mcp` endpoint (found through `server.json`). Otherwise it
 //! opens the vault itself. stdout carries only JSON-RPC; everything else goes to stderr.
+//!
+//! Without a vault argument the agent follows the app: after a vault switch, the next message goes
+//! to whichever vault the app has open.
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -65,13 +68,13 @@ pub fn run(vault: Option<PathBuf>, write: bool) -> Result<()> {
         App(Remote),
         Local(Mcp),
     }
-    let backend = match find_app(vault.as_deref(), write) {
+    let mut backend = match find_app(vault.as_deref(), write) {
         Some(r) => {
             eprintln!("vault mcp: using the running Cēra app at {}", r.addr);
             Backend::App(r)
         }
         None => {
-            let Some(v) = vault else { bail!("Cēra isn't running. Start it, or pass the vault folder: vault mcp <vault>") };
+            let Some(v) = vault.clone() else { bail!("Cēra isn't running. Start it, or pass the vault folder: vault mcp <vault>") };
             let e = Engine::open(&v, EngineOptions::default()).with_context(|| format!("opening {} (is another program using this vault?)", v.display()))?;
             if !e.wait_ready(Duration::from_secs(30)) {
                 eprintln!("vault mcp: still indexing; early results may be incomplete");
@@ -89,14 +92,24 @@ pub fn run(vault: Option<PathBuf>, write: bool) -> Result<()> {
         }
         let reply = match serde_json::from_str::<Value>(&line) {
             Err(e) => Some(json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": format!("parse error: {e}")}}).to_string()),
-            Ok(msg) => match &backend {
+            Ok(msg) => match &mut backend {
                 Backend::Local(m) => m.handle(&msg).map(|v| v.to_string()),
-                Backend::App(r) => match r.post(&line) {
-                    Ok(reply) => reply,
-                    Err(e) => msg
-                        .get("id")
-                        .map(|id| json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32603, "message": format!("Cēra app unreachable: {e}")}}).to_string()),
-                },
+                Backend::App(r) => {
+                    // The app moves to a new port when it switches vaults (or restarts): look again.
+                    let res = r.post(&line).or_else(|e| match find_app(vault.as_deref(), write) {
+                        Some(found) => {
+                            *r = found;
+                            r.post(&line)
+                        }
+                        None => Err(e),
+                    });
+                    match res {
+                        Ok(reply) => reply,
+                        Err(e) => msg.get("id").map(|id| {
+                            json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32603, "message": format!("Cēra app unreachable: {e}")}}).to_string()
+                        }),
+                    }
+                }
             },
         };
         if let Some(r) = reply {

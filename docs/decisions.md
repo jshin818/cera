@@ -112,6 +112,21 @@ Spec: "Vault: Build Specification" (Nov 2026). Product brief from the owner: loo
 - **Near-duplicates:** one-permutation MinHash (64 bins, densified), 16×4 LSH bands, intrusive
   linked-list buckets (~16 B per note-band).
 
+## Switching vaults
+
+- **In place, one vault per window.** The app opens the new vault's engine first, starts a second
+  localhost server for it, points the window at it and then stops the old server (which finishes
+  in-flight requests, ends its event streams and closes its engine). A vault that can't be opened
+  (gone, or held by another process through redb's lock) is reported and the current vault stays.
+  Opening several vaults side by side, as Obsidian does with windows, is not built.
+- **The app owns the list.** Recent vaults live in the app's `config.json` (`recent`, newest first,
+  12 kept) next to `vault`. vault-server only sees a `VaultHost` trait (recent, forget, folder
+  picker, switch), so `vault serve` has no switcher and the button just names the vault. The
+  native folder panel runs on the main thread via `run_on_main_thread`.
+- **Agents follow the app.** Each server republishes `server.json`, and `vault mcp` without a vault
+  argument looks the app up again when a forward fails, so an agent keeps working after a switch
+  and sees the vault the app shows. With a vault argument it only reconnects to that vault.
+
 ## AI agents (MCP)
 
 - **One handler, two transports.** `vault_server::mcp::Mcp::handle` answers JSON-RPC; the running

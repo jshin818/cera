@@ -41,7 +41,8 @@ cd crates/vault-app && cargo tauri build
 ```
 
 The app bundle lands in `target/release/bundle/macos/Cera.app`. It asks for a vault folder on
-first launch and remembers it. Unsigned builds run locally; distribution needs Apple signing and
+first launch and remembers it. To switch vaults, click the vault's name at the bottom of the
+sidebar: it lists recent vaults and can open any folder as a vault. Unsigned builds run locally; distribution needs Apple signing and
 notarization.
 
 Optional, better semantic search: put a Model2Vec model (for example `minishlab/potion-base-8M`:

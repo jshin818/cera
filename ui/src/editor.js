@@ -92,22 +92,6 @@ class HrWidget extends WidgetType {
   eq() { return true }
   toDOM() { const s = document.createElement('span'); s.className = 'cm-hr'; return s }
 }
-class PropsWidget extends WidgetType {
-  constructor(summary) { super(); this.summary = summary }
-  eq(o) { return o.summary === this.summary }
-  toDOM(view) {
-    const s = document.createElement('div');
-    const b = document.createElement('span');
-    b.className = 'cm-props';
-    b.innerHTML = '<b>Properties</b>';
-    b.append(document.createTextNode(this.summary));
-    b.title = 'Click to edit the frontmatter';
-    b.onmousedown = e => { e.preventDefault(); view.dispatch({ selection: { anchor: 4 } }); view.focus() };
-    s.append(b);
-    return s;
-  }
-  ignoreEvent() { return true }
-}
 class EmbedWidget extends WidgetType {
   constructor(target, opts) { super(); this.target = target; this.opts = opts }
   eq(o) { return o.target === this.target }
@@ -182,9 +166,8 @@ function buildDecorations(state, opts) {
     if (fmActive) {
       for (let i = 1; i <= fm.endLine; i++) lineDeco(doc.line(i).from, 'cm-frontmatter');
     } else {
-      const body = doc.sliceString(0, fm.to);
-      const keys = [...body.matchAll(/^([A-Za-z_][\w-]*):/gm)].map(m => m[1]);
-      add(fm.from, fm.to, Decoration.replace({ widget: new PropsWidget(keys.length ? ' · ' + keys.join(', ') : ''), block: true }));
+      // Hidden while not being edited; the Properties chip on the tag row opens it.
+      add(fm.from, fm.to, Decoration.replace({ block: true }));
     }
   }
 
@@ -652,6 +635,12 @@ export function createEditor(parent, opts) {
     reveal(pos) {
       view.dispatch({ selection: { anchor: Math.min(pos, view.state.doc.length) }, scrollIntoView: true });
       view.focus();
+    },
+    editProperties() {
+      if (!frontmatterRange(view.state.doc)) return false;
+      view.focus();
+      view.dispatch({ selection: { anchor: 4 }, scrollIntoView: true });
+      return true;
     },
     clearResolved() { resolved.clear(); view.dispatch({ effects: resolvedEffect.of(null) }) },
     setResolved(map) { for (const [k, v] of Object.entries(map)) resolved.set(k.toLowerCase(), v); view.dispatch({ effects: resolvedEffect.of(null) }) },

@@ -49,6 +49,9 @@ Spec: "Vault: Build Specification" (Nov 2026). Product brief from the owner: loo
   "New folder". Previously an empty name box appeared at the top of the tree and clicking away
   silently cancelled. Sidebar re-renders are deferred while a name box is open so live updates
   can't wipe it, and `renderFolder` now resolves only after open subfolders are drawn.
+- **Properties sit on the tag row** (owner request, Nov 2026). Frontmatter is hidden in the editor
+  until edited; a "Properties · keys" chip at the start of the tag row (tags left out of the summary,
+  since their chips are beside it) puts the cursor in it. Notes without frontmatter show no chip.
 - **Graph scopes are named "This note" / "All notes"** instead of Local / Global; switching reloads
   only the canvas and the toolbar keeps its size.
 - **Slash menu** shows an icon tile and a plain label per block (no raw Markdown syntax) and forces

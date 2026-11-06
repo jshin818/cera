@@ -271,8 +271,9 @@ body.no-counts .f-count { display: none }
 .cm-embed img { max-width: 100%; border-radius: 10px; display: block }
 .cm-embed.note { padding: 10px 14px; border-left: 2px solid var(--honey); background: var(--subtle); border-radius: 0 10px 10px 0; color: var(--muted); font-size: 14px; white-space: pre-wrap }
 .cm-embed.note b { color: var(--fg); display: block; margin-bottom: 4px }
-.cm-props { display: inline-flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; border-radius: 8px; background: var(--subtle); color: var(--muted); font-size: 12.5px; cursor: text }
-.cm-props b { color: var(--fg); font-weight: 500 }
+.props-chip { display: inline-flex; align-items: center; gap: 4px; height: 24px; max-width: 280px; padding: 0 10px; border-radius: 99px; background: var(--subtle); color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.props-chip b { color: var(--fg); font-weight: 500 }
+.props-chip:hover { background: var(--hover); color: var(--fg) }
 .cm-frontmatter { font: 13px/1.6 var(--mono); color: var(--muted); background: var(--subtle) }
 .cm-blockid { color: var(--faint); font-size: .8em }
 .cm-table { font-family: var(--mono); font-size: 13.5px }

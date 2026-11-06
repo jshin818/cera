@@ -774,12 +774,16 @@ function renderTags(suggested) {
   // Inline #tags, read from the live text (code blocks and inline code excluded).
   const prose = body.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
   const inline = [...new Set([...prose.matchAll(/(?:^|[\s(])#([\p{L}\p{N}_\-/]*[\p{L}_\-/][\p{L}\p{N}_\-/]*)/gu)].map(m => m[1].toLowerCase()))].filter(t => !own.includes(t));
+  // Frontmatter sits on this row as a chip; tags are already shown, so the summary skips them.
+  const keys = yaml === null ? null : [...yaml.matchAll(/^([A-Za-z_][\w-]*):/gm)].map(m => m[1]).filter(k => !/^tags?$/i.test(k));
   $('tag-chips').innerHTML =
+    (keys ? `<button class="props-chip" data-props title="Edit properties"><b>Properties</b>${keys.length ? ' · ' + esc(keys.join(', ')) : ''}</button>` : '') +
     own.map(t => `<span class="tag-chip" data-c="${tagColor(t)}"><button data-tag="${esc(t)}">${esc(t)}</button><button data-rm="${esc(t)}" aria-label="Remove tag ${esc(t)}">×</button></span>`).join('') +
     inline.map(t => `<button class="tag-chip" data-c="${tagColor(t)}" data-tag="${esc(t)}" title="Inline tag in the text">${esc(t)}</button>`).join('') +
     suggested.filter(s => !own.includes(s.tag)).map(s => `<button class="tag-chip suggest" data-c="${tagColor(s.tag)}" data-add="${esc(s.tag)}" title="Suggested from similar notes">+ ${esc(s.tag)}</button>`).join('');
 }
 $('tags').addEventListener('click', e => {
+  if (e.target.closest('[data-props]')) return editor.editProperties();
   const t = e.target.closest('[data-tag]');
   if (t) return explore('tags', t.dataset.tag);
   const rm = e.target.closest('[data-rm]');

@@ -254,7 +254,16 @@ fn main() -> Result<()> {
         Cmd::Bench(args) => bench::run(args)?,
         Cmd::Serve { vault, addr, open } => {
             let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
-            rt.block_on(vault_server::serve(vault_server::ServeOptions { vault, addr, open_browser: open, token: None, on_ready: None }))?;
+            rt.block_on(vault_server::serve(vault_server::ServeOptions {
+                vault,
+                engine: None,
+                addr,
+                open_browser: open,
+                token: None,
+                on_ready: None,
+                host: None,
+                shutdown: None,
+            }))?;
         }
     }
     Ok(())

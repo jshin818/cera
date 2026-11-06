@@ -13,6 +13,9 @@ async function req(method, url, body) {
 const q = o => new URLSearchParams(Object.entries(o).filter(([, v]) => v !== undefined && v !== null)).toString();
 export const api = {
   boot: () => req('GET', '/api/boot'),
+  vaults: () => req('GET', '/api/vaults'),
+  openVault: path => req('POST', '/api/vaults/open', { path }),
+  forgetVault: path => req('POST', '/api/vaults/forget', { path }),
   status: () => req('GET', '/api/status'),
   dir: path => req('GET', `/api/dir?${q({ path })}`),
   recent: limit => req('GET', `/api/recent?${q({ limit })}`),

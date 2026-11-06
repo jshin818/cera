@@ -5602,6 +5602,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-stream",
+ "tower",
  "tower-http 0.7.1",
  "tracing",
  "vault-core",

@@ -30,20 +30,45 @@ use vault_core::{CoreError, Engine, EngineOptions};
 #[folder = "../../ui/dist"]
 struct Assets;
 
+pub use vault_core::Engine as VaultEngine;
+
 pub struct ServeOptions {
     pub vault: PathBuf,
+    /// An engine already open on `vault`; `None` opens it here.
+    pub engine: Option<Engine>,
     pub addr: String,
     pub open_browser: bool,
     /// Require this token on API calls. `None` = no auth (still bound to localhost).
     pub token: Option<String>,
     /// Called with the bound address and the URL to open once the server is listening.
     pub on_ready: Option<Box<dyn FnOnce(SocketAddr, String) + Send>>,
+    /// Lets the page switch vaults (the desktop app). `None` hides the switcher.
+    pub host: Option<Arc<dyn VaultHost>>,
+    /// Stop serving when this resolves. `None` = on Ctrl-C.
+    pub shutdown: Option<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>>,
+}
+
+/// What the desktop app does for the vault switcher. Every method may block; the server calls
+/// them off the async runtime.
+pub trait VaultHost: Send + Sync {
+    /// Vaults opened before, most recent first (may include folders that no longer exist).
+    fn recent(&self) -> Vec<PathBuf>;
+    /// Drop a vault from the recent list.
+    fn forget(&self, vault: &std::path::Path);
+    /// Ask for a folder with the system picker. `None` = cancelled.
+    fn pick_folder(&self) -> Option<PathBuf>;
+    /// Serve `engine` (already open on `vault`) in place of this server, which should then stop.
+    fn switch_to(&self, vault: PathBuf, engine: Engine);
 }
 
 #[derive(Clone)]
 struct App {
     engine: Engine,
     token: Option<Arc<str>>,
+    host: Option<Arc<dyn VaultHost>>,
+    /// Flips to true when the server is stopping, so open event streams end and the graceful
+    /// shutdown doesn't wait on them forever.
+    closing: Option<tokio::sync::watch::Receiver<bool>>,
 }
 
 pub fn random_token() -> String {
@@ -52,10 +77,15 @@ pub fn random_token() -> String {
     (0..32).map(|_| format!("{:x}", r.random_range(0..16u8))).collect()
 }
 
-/// Open the vault and serve until Ctrl-C.
+/// Open the vault and serve until Ctrl-C (or `o.shutdown`).
 pub async fn serve(o: ServeOptions) -> anyhow::Result<()> {
-    let vault = o.vault.clone();
-    let engine = tokio::task::spawn_blocking(move || Engine::open(&vault, EngineOptions::default())).await??;
+    let engine = match o.engine {
+        Some(e) => e,
+        None => {
+            let vault = o.vault.clone();
+            tokio::task::spawn_blocking(move || Engine::open(&vault, EngineOptions::default())).await??
+        }
+    };
     let listener = tokio::net::TcpListener::bind(&o.addr).await?;
     let addr = listener.local_addr()?;
     let url = match &o.token {
@@ -69,15 +99,22 @@ pub async fn serve(o: ServeOptions) -> anyhow::Result<()> {
     if let Some(cb) = o.on_ready {
         cb(addr, url.clone());
     }
-    let app = router(engine.clone(), o.token);
-    let e2 = engine.clone();
+    let (closing_tx, closing) = tokio::sync::watch::channel(false);
+    let app = build_router(engine.clone(), o.token, o.host, Some(closing));
+    let stop = o.shutdown;
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
-            let _ = tokio::signal::ctrl_c().await;
-            eprintln!("Vault: shutting down");
+            match stop {
+                Some(f) => f.await,
+                None => {
+                    let _ = tokio::signal::ctrl_c().await;
+                }
+            }
+            let _ = closing_tx.send(true);
         })
         .await?;
-    tokio::task::spawn_blocking(move || e2.shutdown()).await?;
+    eprintln!("Vault: closing {}", engine.root().display());
+    tokio::task::spawn_blocking(move || engine.shutdown()).await?;
     Ok(())
 }
 
@@ -91,9 +128,20 @@ fn open_url(url: &str) {
 }
 
 pub fn router(engine: Engine, token: Option<String>) -> Router {
-    let state = App { engine, token: token.map(Arc::from) };
+    router_with_host(engine, token, None)
+}
+
+pub fn router_with_host(engine: Engine, token: Option<String>, host: Option<Arc<dyn VaultHost>>) -> Router {
+    build_router(engine, token, host, None)
+}
+
+fn build_router(engine: Engine, token: Option<String>, host: Option<Arc<dyn VaultHost>>, closing: Option<tokio::sync::watch::Receiver<bool>>) -> Router {
+    let state = App { engine, token: token.map(Arc::from), host, closing };
     let api = Router::new()
         .route("/api/boot", get(boot))
+        .route("/api/vaults", get(vaults_get))
+        .route("/api/vaults/open", post(vaults_open))
+        .route("/api/vaults/forget", post(vaults_forget))
         .route("/api/status", get(status))
         .route("/api/dir", get(dir))
         .route("/api/recent", get(recent))
@@ -232,6 +280,64 @@ async fn boot(State(app): State<App>) -> ApiResult {
         let ws = e.workspace();
         let first = ws.get("last").and_then(|v| v.as_str()).and_then(|p| e.read_note(p).ok());
         Ok(json!({"workspace": ws, "first": first, "status": e.status(), "vault": e.root().file_name().and_then(|s| s.to_str()).unwrap_or("Vault")}))
+    })
+    .await
+}
+
+fn vault_json(p: &std::path::Path, current: bool) -> Value {
+    json!({"path": p, "name": p.file_name().and_then(|s| s.to_str()).unwrap_or("Vault"), "current": current, "missing": !p.is_dir()})
+}
+
+/// The open vault and the recent ones the app remembers. `switchable` is false under `vault serve`.
+async fn vaults_get(State(app): State<App>) -> ApiResult {
+    let host = app.host.clone();
+    blocking(&app, move |e| {
+        let here = e.root().canonicalize().unwrap_or_else(|_| e.root().to_path_buf());
+        let mut list = vec![vault_json(&here, true)];
+        for p in host.as_ref().map(|h| h.recent()).unwrap_or_default() {
+            if p.canonicalize().unwrap_or_else(|_| p.clone()) != here && !list.iter().any(|v| v["path"] == json!(p)) {
+                list.push(vault_json(&p, false));
+            }
+        }
+        Ok(json!({"switchable": host.is_some(), "vaults": list}))
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+struct OpenBody {
+    /// The folder to open; absent = ask with the system folder picker.
+    path: Option<PathBuf>,
+}
+
+/// Open another vault. The engine is opened here first, so a folder that can't be opened (gone, or
+/// in use by another program) leaves the current vault running and comes back as an error.
+async fn vaults_open(State(app): State<App>, Json(b): Json<OpenBody>) -> ApiResult {
+    let Some(host) = app.host.clone() else {
+        return Err(ApiError(CoreError::Invalid("switching vaults needs the Cēra app".into())));
+    };
+    blocking(&app, move |e| {
+        let Some(path) = b.path.or_else(|| host.pick_folder()) else { return Ok(json!({"opened": false})) };
+        if !path.is_dir() {
+            return Err(CoreError::NotFound(format!("{} is not a folder", path.display())));
+        }
+        let path = path.canonicalize().unwrap_or(path);
+        if e.root().canonicalize().ok().as_deref() == Some(path.as_path()) {
+            return Ok(json!({"opened": false, "current": true}));
+        }
+        let next = Engine::open(&path, EngineOptions::default()).map_err(|err| CoreError::Other(format!("couldn't open {}: {err}", path.display())))?;
+        let name = vault_json(&path, true)["name"].clone();
+        host.switch_to(path, next);
+        Ok(json!({"opened": true, "name": name}))
+    })
+    .await
+}
+
+async fn vaults_forget(State(app): State<App>, Json(b): Json<OpenBody>) -> ApiResult {
+    let (Some(host), Some(path)) = (app.host.clone(), b.path) else { return Ok(Json(json!({"ok": false}))) };
+    blocking(&app, move |_| {
+        host.forget(&path);
+        Ok(json!({"ok": true}))
     })
     .await
 }
@@ -437,8 +543,15 @@ async fn rescan(State(app): State<App>) -> ApiResult {
 async fn events(State(app): State<App>) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
     use futures_util::StreamExt;
     let rx = app.engine.subscribe();
+    let closing = app.closing.clone();
     let stream = tokio_stream::wrappers::BroadcastStream::new(rx)
-        .filter_map(|m| async move { m.ok().map(|ev| Ok(Event::default().event("change").json_data(ev).unwrap_or_default())) });
+        .filter_map(|m| async move { m.ok().map(|ev| Ok(Event::default().event("change").json_data(ev).unwrap_or_default())) })
+        .take_until(async move {
+            match closing {
+                Some(mut c) => drop(c.wait_for(|c| *c).await),
+                None => std::future::pending().await,
+            }
+        });
     Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
 }
 

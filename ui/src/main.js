@@ -969,6 +969,8 @@ const COMMANDS = [
   ['Copy note as Markdown', '', () => $('m-copy').click()],
   ['Find in note', '⌘F', () => { if (cur) { editor.focus(); import('@codemirror/search').then(m => m.openSearchPanel(editor.view)) } }],
   ['Rescan vault for changes', '', () => api.rescan().then(() => toast('Rescanning the vault'))],
+  ['Switch vault', '', () => { if (vaultsCanSwitch) { closePal(); openVaultMenu() } else toast('Switching vaults needs the Cēra app.') }],
+  ['Open folder as vault', '', () => { closePal(); switchVault(null) }],
   ['Close tab', '⌘W', () => closeTab(ws.active)],
 ];
 let palRows = [];
@@ -1256,6 +1258,75 @@ $('settings-body').addEventListener('click', e => {
 });
 applySettings();
 
+/* ---------- vaults ---------- */
+// The desktop app can switch vaults in place: it opens the new vault, points this window at it and
+// closes the old one. Under `vault serve` the button just names the vault.
+let vaultsCanSwitch = false;
+function setVaultName(name) {
+  vaultName = name;
+  $('vault-name').textContent = name;
+  document.title = `${name} — Cera`;
+}
+api.vaults().then(v => {
+  vaultsCanSwitch = v.switchable;
+  $('vault-btn').disabled = !v.switchable;
+  $('vault-btn').title = v.switchable ? 'Switch vault' : vaultName;
+}).catch(() => ($('vault-btn').disabled = true));
+async function openVaultMenu() {
+  const menu = $('vmenu');
+  if (!menu.hidden) return closeVaultMenu();
+  let v;
+  try { v = await api.vaults() } catch (e) { return fail(e) }
+  const check = `<svg class="ic check" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></svg>`;
+  menu.innerHTML = v.vaults.map(x => `
+    <div class="row v-row${x.missing ? ' missing' : ''}" role="menuitemradio" aria-checked="${x.current}" tabindex="-1" data-vault="${esc(x.path)}" title="${esc(x.path)}${x.missing ? ' (not found)' : ''}">
+      ${x.current ? check : '<i></i>'}
+      <span><b>${esc(x.name)}</b><small>&lrm;${esc(x.path)}</small></span>
+      ${x.current ? '' : `<button class="v-forget" data-forget="${esc(x.path)}" aria-label="Remove ${esc(x.name)} from this list" title="Remove from list"><svg class="ic" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>`}
+    </div>`).join('') +
+    `<div class="v-sep"></div><button class="row v-open" role="menuitem" data-pick>${SVG(ICON.folder)}Open folder as vault…</button>`;
+  place(menu, $('vault-btn'));
+  $('vault-btn').setAttribute('aria-expanded', 'true');
+  (menu.querySelector('[aria-checked="false"]:not(.missing)') || menu.querySelector('[data-pick]')).focus();
+}
+function closeVaultMenu() {
+  $('vmenu').hidden = true;
+  $('vault-btn').setAttribute('aria-expanded', 'false');
+}
+async function switchVault(path) {
+  closeVaultMenu();
+  // Save first: the server for this vault stops once the new one is up.
+  flush();
+  await saving?.catch?.(() => {});
+  try {
+    const r = await api.openVault(path);
+    if (r.opened) toast(`Opening ${r.name}…`, null, null, 10000);
+  } catch (e) {
+    toast(e.status === 404 ? 'That folder no longer exists. Remove it from the list, or open another.' : e.message);
+  }
+}
+$('vault-btn').onclick = () => vaultsCanSwitch && openVaultMenu();
+$('vmenu').addEventListener('click', async e => {
+  const f = e.target.closest('[data-forget]');
+  if (f) {
+    e.stopPropagation();
+    await api.forgetVault(f.dataset.forget).catch(fail);
+    closeVaultMenu();
+    return openVaultMenu();
+  }
+  if (e.target.closest('[data-pick]')) return switchVault(null);
+  const row = e.target.closest('[data-vault]');
+  if (row && row.getAttribute('aria-checked') === 'false') switchVault(row.dataset.vault);
+  else if (row) closeVaultMenu();
+});
+$('vmenu').addEventListener('keydown', e => {
+  const items = [...$('vmenu').querySelectorAll('[data-vault], [data-pick]')];
+  const i = items.indexOf(document.activeElement);
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus() }
+  else if (e.key === 'Enter' && i >= 0 && !e.target.closest('[data-forget]')) { e.preventDefault(); items[i].click() }
+  else if (e.key === 'Escape') { closeVaultMenu(); $('vault-btn').focus() }
+});
+
 /* ---------- keyboard ---------- */
 addEventListener('keydown', e => {
   const mod = e.metaKey || e.ctrlKey;
@@ -1271,10 +1342,11 @@ addEventListener('keydown', e => {
   else if (mod && e.key === ',') { e.preventDefault(); $('settings-veil').hidden ? openSettings() : closeSettings() }
   else if (mod && e.key === '\\') { e.preventDefault(); setSide(app.classList.contains('collapsed')) }
   else if (e.ctrlKey && e.key === 'Tab' && ws.tabs.length > 1) { e.preventDefault(); ws.active = (ws.active + (e.shiftKey ? ws.tabs.length - 1 : 1)) % ws.tabs.length; openNote(ws.tabs[ws.active]) }
-  else if (e.key === 'Escape') { if (!$('settings-veil').hidden) closeSettings(); else if (!$('veil').hidden) closePal(); else ['menu', 'move', 'fmenu', 'tagsug'].forEach(id => ($(id).hidden = true)) }
+  else if (e.key === 'Escape') { if (!$('settings-veil').hidden) closeSettings(); else if (!$('veil').hidden) closePal(); else ['menu', 'move', 'fmenu', 'tagsug', 'vmenu'].forEach(id => ($(id).hidden = true)) }
 });
 document.addEventListener('mousedown', e => {
   if (!e.target.closest('#menu, #more')) $('menu').hidden = true;
+  if (!e.target.closest('#vmenu, #vault-btn')) closeVaultMenu();
   if (!e.target.closest('#move, #crumb')) $('move').hidden = true;
   if (!e.target.closest('#fmenu, [data-act="more"]')) $('fmenu').hidden = true;
   if (!e.target.closest('#tagsug, #tag-in')) $('tagsug').hidden = true;
@@ -1333,7 +1405,7 @@ async function pollStatus() {
   }
   ws = Object.assign({ tabs: [], active: 0, last: null }, boot.workspace || {});
   ws.tabs = (ws.tabs || []).filter(Boolean);
-  if (boot.vault) { vaultName = boot.vault; document.title = `${boot.vault} — Cera` }
+  if (boot.vault) setVaultName(boot.vault);
   // First frame: the last note straight from disk, before the index is ready.
   if (boot.first) {
     if (!ws.tabs.includes(boot.first.path)) { ws.tabs = [boot.first.path]; ws.active = 0 }

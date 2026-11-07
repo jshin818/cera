@@ -197,6 +197,10 @@ pub fn run(a: BenchArgs) -> Result<()> {
         eprintln!("  hybrid search...");
         let hy: Vec<f64> = queries.iter().map(|q| time(|| e.search(q, 20)).1).collect();
         rows.push(row("Hybrid search (BM25 + vector + RRF)", 50.0, hy, "excludes first model load"));
+        eprintln!("  recall...");
+        let opts = vault_core::RecallOptions::default();
+        let rc: Vec<f64> = queries.iter().take(100).map(|q| time(|| e.recall(q, &opts)).1).collect();
+        rows.push(row("Recall (cited passages for Ask)", 100.0, rc, "reads + chunks ~30 candidate notes; no spec budget"));
         e.recompute_graph();
         eprintln!("  related notes...");
         let sample: Vec<&String> = (0..100).map(|_| &paths[rng.random_range(0..paths.len())]).collect();

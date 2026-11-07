@@ -409,3 +409,88 @@ body.no-counts .f-count { display: none }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px) } }
 html.theme-fade, html.theme-fade * { transition: background-color .18s ease, color .18s ease, border-color .18s ease !important }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important } }
+/* ask: the thread on the left, its numbered sources on the right */
+#explore.ask-view { max-width: 1240px; height: 100%; padding: 0 28px; animation: none; container-type: inline-size }
+.ask { display: grid; grid-template-columns: minmax(0, 1fr) clamp(280px, 36%, 400px); gap: 36px; height: 100% }
+.ask-main { display: flex; flex-direction: column; min-height: 0 }
+#ask-thread { flex: 1; overflow-y: auto; padding: 5vh 4px 12px; scrollbar-width: thin }
+.ask-empty { padding-top: 8vh }
+.ask-empty code, .prose-a code { font: 12.5px var(--mono); padding: 1px 5px; background: var(--subtle); border-radius: 4px }
+.ask-dock { flex: none; padding: 8px 0 16px; background: var(--bg) }
+.ask-dock .composer { padding: 10px 10px 10px 18px }
+#ask-q { flex: 1; min-width: 0; resize: none; max-height: 30vh; font-size: 15px; line-height: 1.5; field-sizing: content; padding: 4px 0 }
+#ask-q::placeholder { color: var(--faint) }
+.send { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; background: var(--fg); color: var(--bg); flex: none }
+.send:disabled { background: var(--subtle); color: var(--faint); cursor: default }
+.ask-foot { display: flex; align-items: center; gap: 8px; padding: 8px 6px 0; font-size: 12px; color: var(--faint) }
+.ask-model { display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 10px; border-radius: 99px; color: var(--muted); font-size: 12px }
+.ask-model:hover { background: var(--hover); color: var(--fg) }
+.ask-model .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint) }
+.ask-model .dot.on { background: var(--honey) }
+.ask-link { color: var(--muted); font-size: 12.5px; text-decoration: underline; text-decoration-color: var(--border); text-underline-offset: 3px }
+.ask-link:hover { color: var(--fg); text-decoration-color: currentColor }
+.grow { flex: 1 }
+.turn { padding: 4px 0 26px; border-bottom: 1px solid var(--border); margin-bottom: 22px }
+.turn:last-child { border-bottom: 0 }
+.turn .q { font-size: 20px; font-weight: 600; letter-spacing: -.015em; line-height: 1.35; margin-bottom: 12px; overflow-wrap: anywhere }
+.answer { font-size: 15.5px; line-height: 1.65; overflow-wrap: anywhere }
+.answer.muted, .answer .muted { color: var(--muted) }
+.prose-a p { margin: 0 0 12px }
+.prose-a ul, .prose-a ol { margin: 0 0 12px; padding-left: 22px }
+.prose-a li { margin: 3px 0 }
+.prose-a h4 { margin: 18px 0 6px; font-size: 15.5px; font-weight: 600 }
+.prose-a blockquote { margin: 0 0 12px; padding-left: 12px; border-left: 2px solid var(--border); color: var(--muted) }
+.prose-a pre { margin: 0 0 12px; padding: 10px 12px; background: var(--subtle); border-radius: 8px; overflow-x: auto; font: 12.5px/1.5 var(--mono) }
+.prose-a .wl { color: var(--fg); text-decoration: underline; text-decoration-color: var(--honey); text-underline-offset: 3px }
+.cite { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; margin: 0 1px; border-radius: 6px; vertical-align: 2px; background: color-mix(in srgb, var(--honey) 18%, transparent); color: var(--fg); font: 600 11px/1 var(--sans); font-variant-numeric: tabular-nums }
+.cite:hover { background: var(--honey); color: #000 }
+.caret { display: inline-block; width: 7px; height: 15px; margin-left: 2px; vertical-align: -2px; background: var(--honey); border-radius: 1px; animation: blink 1s steps(2) infinite }
+.pulse { display: inline-block; width: 8px; height: 8px; margin-right: 9px; border-radius: 50%; background: var(--honey); animation: breathe 1.2s ease-in-out infinite }
+.pass { display: flex; gap: 10px; width: 100%; padding: 8px 10px; margin: 0 0 4px; border-radius: 10px; text-align: left; color: var(--fg); font-size: 14px; line-height: 1.55 }
+.pass:hover { background: var(--hover) }
+.ask-note { margin-top: 10px; padding: 10px 14px; border-radius: 10px; background: var(--subtle); color: var(--muted); font-size: 13.5px }
+.ask-note.err { color: var(--danger) }
+.a-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin-top: 14px; color: var(--faint); font-size: 12.5px }
+.a-meta .sep { color: var(--border) }
+.ask-hit { display: flex; align-items: center; gap: 10px }
+.ask-hit .ic { color: var(--honey); flex: none }
+.ask-hit b { min-width: 0 }
+.ask-side { overflow-y: auto; padding: 5vh 2px 24px; scrollbar-width: thin }
+.ask-side h3 { display: flex; align-items: baseline; gap: 8px; margin: 18px 0 10px; font-size: 12px; font-weight: 500; color: var(--muted) }
+.ask-side h3:first-child { margin-top: 0 }
+.ask-side h3 small { color: var(--faint); font-weight: 400; font-variant-numeric: tabular-nums }
+.src-empty p { color: var(--faint); font-size: 13px; line-height: 1.55 }
+.src { padding: 12px 14px; margin-bottom: 10px; border: 1px solid var(--border); border-radius: 12px; scroll-margin: 12px }
+.src.flash { animation: flash 1.2s var(--ease) }
+.src header { display: flex; align-items: center; gap: 9px; min-width: 0 }
+.src-n { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 6px; background: color-mix(in srgb, var(--honey) 18%, transparent); font: 600 11.5px/1 var(--sans); font-variant-numeric: tabular-nums; flex: none }
+.src-title { min-width: 0; font-weight: 600; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.src-title:hover { text-decoration: underline; text-underline-offset: 3px }
+.src-where { margin: 3px 0 8px 29px; color: var(--faint); font-size: 12px; overflow-wrap: anywhere }
+.src-text { display: -webkit-box; -webkit-line-clamp: 7; -webkit-box-orient: vertical; overflow: hidden; width: 100%; padding: 8px 10px; border-radius: 8px; background: var(--subtle); color: var(--muted); font-size: 13px; line-height: 1.55; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere }
+.src-text:hover { color: var(--fg) }
+.src-why { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px }
+.src-why span { padding: 1px 8px; border-radius: 99px; border: 1px solid var(--border); color: var(--faint); font-size: 11.5px }
+.src-links div { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 0; font-size: 13px; color: var(--faint) }
+.src-links button { color: var(--fg); font-weight: 500 }
+.src-links button:hover { text-decoration: underline; text-underline-offset: 3px }
+.src-gaps { margin: 0; padding: 0; list-style: none }
+.src-gaps li { position: relative; padding: 6px 0 6px 18px; color: var(--muted); font-size: 13px; line-height: 1.5 }
+.src-gaps li::before { content: ""; position: absolute; left: 3px; top: 13px; width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--honey) }
+@keyframes blink { to { opacity: 0 } }
+@keyframes breathe { 50% { opacity: .35; transform: scale(.8) } }
+@keyframes flash { from { box-shadow: 0 0 0 3px color-mix(in srgb, var(--honey) 55%, transparent); border-color: var(--honey) } }
+@media (max-width: 768px) { #explore.ask-view { padding: 0 16px } }
+/* Too narrow for two columns: sources go under the thread and the page scrolls as one. */
+@container (max-width: 760px) {
+  .ask { display: block; height: auto }
+  #ask-thread { overflow: visible; padding-top: 3vh }
+  .ask-dock { position: sticky; bottom: 0; z-index: 2 }
+  .ask-side { overflow: visible; padding: 8px 0 30vh; border-top: 1px solid var(--border) }
+  .ask-side h3:first-child { margin-top: 18px }
+}
+.s-field { display: flex; align-items: center; gap: 6px; flex: none }
+.s-field input, #s-ai select { width: 190px; height: 32px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--fg); font-size: 13px }
+.s-field input:focus, #s-ai select:focus { border-color: var(--faint) }
+.s-field .btn { height: 32px; padding: 0 11px }
+@media (max-width: 768px) { .s-field { flex-wrap: wrap } .s-field input { width: 100% } }

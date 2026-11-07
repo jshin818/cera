@@ -24,6 +24,7 @@ export const ICON = {
   link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
   command: '<path d="M9 6v12M15 6v12M6 9h12M6 15h12"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  ask: '<path d="M21 12a8 8 0 0 1-11.8 7L4 20l1.1-4.6A8 8 0 1 1 21 12z"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .8-1 1.5v.2M12 16.5h.01"/>',
   dup: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',
 };
 export function logo(size) {
@@ -48,3 +49,14 @@ export function ago(ms) {
 export const titleOf = path => path.split('/').pop().replace(/\.md$/i, '');
 export const folderOf = path => path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
 export const fmt = n => Number(n).toLocaleString();
+// UTF-8 byte offset (what the engine reports) to a JS string index.
+export function byteToIndex(s, b) {
+  let bytes = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (bytes >= b) return i;
+    const c = s.codePointAt(i);
+    bytes += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
+    if (c >= 0x10000) i++;
+  }
+  return s.length;
+}

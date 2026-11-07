@@ -22,8 +22,9 @@ Spec: "Vault: Build Specification" (Nov 2026). Product brief from the owner: loo
   folder icons, tags as coloured chips, light motion (opacity/transform). **Changed:** the note title
   is the file name (Obsidian semantics), so renaming the title renames the file and rewrites links.
   **Graph view** was removed from Cēra but is a Vault Phase 3 deliverable; it lives under Explore
-  only. Cēra's Return page, Share, Chat (needs a cloud LLM) and dictation are not carried over
-  (cloud services are a non-goal; WKWebView has no Web Speech recognition).
+  only. Cēra's Return page, Share and dictation are not carried over (cloud services are a non-goal;
+  WKWebView has no Web Speech recognition). Chat came back as **Ask** (Nov 2026, see below), with
+  the model opt-in and local-first.
 - **Delete** moves files to `<vault>/.trash/` (Obsidian's local-trash convention), never unlinks.
 - **Tabs** appear only when more than one note is open (⌘-click a link or result).
 - **Sidebar is one tree** (owner request, Nov 2026). Cēra's separate "Folders" and "Notes" groups are
@@ -154,11 +155,54 @@ Spec: "Vault: Build Specification" (Nov 2026). Product brief from the owner: loo
   appended to `.vault/agent-log.jsonl`; that log is a convenience record, so losing it with the
   cache loses only history.
 
+## Ask and recall (Nov 2026)
+
+Owner request: a single-user, local AI memory hub; a chat that recalls from the notes and shows
+results with sources ("the sources part is really important"). Answer models chosen by the owner:
+a local model or Claude, picked in Settings; with neither, sources only.
+
+- **Recall is engine work** (`vault-core/src/recall.rs`), shared by the Ask view, `/api/recall` and
+  the MCP `context` tool. Candidates: BM25 notes + notes of the best vector chunks (RRF), plus one
+  hop of links from the top three (answers often sit in a linked note). Every chunk of a candidate is
+  scored by cosine with the question and by words (BM25-style saturation, IDF over the candidate
+  chunks, light stemming so "shipping" meets "ship"); the two are fused as normalised scores with the
+  note's rank, nudged by PageRank and frecency. Rank fusion was tried first and flattened a clear
+  winner into a tie that note popularity decided. At most two passages per note, near-identical
+  excerpts dropped, ~12k characters total.
+- **A citation points at lines, not sections.** The excerpt is the best paragraph run inside the
+  chunk (≤ ~900 bytes), returned with its byte range, first line, heading path, edit date and the
+  reasons it was picked ("matches pricing", "similar meaning", "linked from Home"). The UI opens the
+  note with that exact range selected.
+- **Links and gaps are part of the answer.** Recall reports which source notes link to each other,
+  and what the notes don't settle: no match, only a loose match, a linked note that was never written
+  (an unresolved `[[link]]` whose name touches the question), a source not edited for a year, and
+  sources that are near-duplicates (MinHash) and may disagree.
+- **The model is opt-in, and this reverses "no cloud" only by choice.** `provider`: auto (Claude when
+  a key is set, else a local server if one answers), claude, local, off. Claude goes through the
+  Messages API over raw HTTP (no Rust SDK): `claude-opus-5-5` by default, streaming, `effort: low`,
+  server-side fallback on for Opus/Sonnet 5.5. Local is any OpenAI-compatible server on loopback
+  (Ollama, LM Studio); other hosts are refused. The prompt carries only the numbered passages and
+  asks for `[n]` citations and for gaps to be said, not filled.
+- **The key never lives in the vault.** `<config>/Cera/ai.json` (mode 0600, atomic write), or
+  `ANTHROPIC_API_KEY`. The API reports `has_key`/`key_source`, never the key. `CERA_CONFIG_DIR`
+  overrides the folder.
+- **Saved answers are notes.** "Save to Inbox" writes the answer with its sources as wikilinks to the
+  cited headings, so answers join the graph and future recalls. (They can be recalled as sources
+  too; if that gets circular, rank `Inbox/` answers below primary notes.)
+- **reqwest 0.13.5 with rustls** (its default TLS) for the model calls. It pulls aws-lc-rs, which
+  builds C; ring via `rustls-no-provider` was the pure-ish alternative but needs a provider install
+  at startup. Revisit if build time matters.
+- **Bench:** new row "Recall (cited passages for Ask)", 100 ms budget (no spec row). 10k-note vault on
+  the M-series Mac: p50 2.5 ms, p95 3.2 ms with the hashed embedder. Existing rows unchanged.
+
 ## Not done (later phases)
 
 - Agents: change subscriptions, edit_section and set_properties tools, a write toggle and "what
   the agent changed" view with undo in Settings, an `.mcpb` bundle, `AGENTS.md` in the vault.
 - Phase 3: EmbeddingGemma upgrade, ColBERT/cross-encoder reranker, YAKE tag keyphrases.
+- Ask: contextual chunk headers (title + heading path embedded with each chunk), a reranker over the
+  recall candidates, typed links (`decided-by::`, `owner::`) and entity notes for people/projects,
+  answer-quality evals on a golden question set, tool use (let the model call recall again).
 - Phase 4: WASM plugin host, Dataview-like property queries (frontmatter is already in redb `notes`).
 - Phase 5: Loro sync, BLAKE3 blob store, E2EE relay, iOS shell.
 - Absolute budgets were measured on a 4-vCPU Linux container, not the M5; see README.

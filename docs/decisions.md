@@ -186,6 +186,12 @@ a local model or Claude, picked in Settings; with neither, sources only.
 - **The key never lives in the vault.** `<config>/Cera/ai.json` (mode 0600, atomic write), or
   `ANTHROPIC_API_KEY`. The API reports `has_key`/`key_source`, never the key. `CERA_CONFIG_DIR`
   overrides the folder.
+- **Ask reads as one column of text.** The owner asked for a chat-like page with no side panel and
+  minimal chrome. Citations are pills inside the answer, named by the note (a leading date is
+  dropped; runs like `[2][3]` become one pill, "Pricing review +1"). A pill opens that passage in a
+  modal; "n sources" under the answer opens the list of all of them. Gaps about the question stay in
+  the thread as one faint line; gaps about one source (stale, near-duplicate) live in its modal.
+  With no model, the reply is the top passages quoted, each ending in its pill.
 - **Saved answers are notes.** "Save to Inbox" writes the answer with its sources as wikilinks to the
   cited headings, so answers join the graph and future recalls. (They can be recalled as sources
   too; if that gets circular, rank `Inbox/` answers below primary notes.)

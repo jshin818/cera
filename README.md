@@ -70,8 +70,9 @@ Synthetic vaults for benchmarking: `cargo run --release -p gen-vault -- ~/vault-
 ⌘J (or a question ending in "?" on Home) opens **Ask**. Cēra finds the passages that answer it,
 numbered, with the note, section, line, edit date and why each was picked, how those notes link to
 each other, and what the notes leave out. An answer model, if you set one up, writes a short answer
-that cites them as [n]; click a citation to see the source, and open a source to land on the exact
-lines. "Save to Inbox" keeps the answer as a note linked to its sources.
+with each citation as a pill in the text; click a pill to read that passage, or "sources" under the
+answer for the list of all of them, and open a source to land on the exact lines. "Save" keeps the
+answer as a note in Inbox linked to its sources.
 
 Settings → AI answers picks the model: **Claude** (your Anthropic API key, or `ANTHROPIC_API_KEY`),
 a **local** OpenAI-compatible server such as Ollama (`localhost:11434`) or LM Studio

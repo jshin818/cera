@@ -110,7 +110,7 @@ function noteList(notes, depthClass = '') {
     return wrap;
   }
   const box = document.createElement('div');
-  box.className = 'vlist';
+  box.className = 'vscroll';
   box.style.height = Math.min(notes.length * ROW_H, window.innerHeight * 0.6) + 'px';
   const inner = document.createElement('div');
   inner.style.height = notes.length * ROW_H + 'px';
@@ -973,10 +973,74 @@ async function newNote(folder) {
 }
 $('new').onclick = () => newNote();
 
+/* ---------- daily notes and templates: Obsidian's core plugins, configured in .obsidian/ ---------- */
+let noteCfg = { daily_folder: '', daily_format: '', daily_template: '', templates_folder: '' };
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+// The moment.js tokens Obsidian users put in daily-note formats and templates; [text] is literal.
+function momentFormat(d, f) {
+  const pad = n => String(n).padStart(2, '0');
+  const t = {
+    YYYY: d.getFullYear(), YY: String(d.getFullYear()).slice(2), MMMM: MONTHS[d.getMonth()], MMM: MONTHS[d.getMonth()].slice(0, 3), MM: pad(d.getMonth() + 1), M: d.getMonth() + 1,
+    DD: pad(d.getDate()), D: d.getDate(), dddd: DAYS[d.getDay()], ddd: DAYS[d.getDay()].slice(0, 3), HH: pad(d.getHours()), H: d.getHours(), mm: pad(d.getMinutes()), ss: pad(d.getSeconds()),
+  };
+  return f.replace(/\[([^\]]*)\]|YYYY|YY|MMMM|MMM|MM|M|DD|D|dddd|ddd|HH|H|mm|ss/g, (m, lit) => lit ?? String(t[m]));
+}
+// {{title}}, {{date}}, {{time}}, and {{date:FORMAT}} / {{time:FORMAT}}, as Obsidian's Templates plugin fills them.
+const fillTemplate = (text, title, d = new Date()) => text.replace(/\{\{\s*(title|date|time)(?::([^}]*))?\s*\}\}/gi, (_, k, f) => {
+  k = k.toLowerCase();
+  return k === 'title' ? title : momentFormat(d, f?.trim() || (k === 'date' ? 'YYYY-MM-DD' : 'HH:mm'));
+});
+const templatesFolder = () => noteCfg.templates_folder || 'Templates';
+async function templateText(path, title) {
+  const n = await api.note(/\.md$/i.test(path) ? path : path + '.md').catch(() => null);
+  return n ? fillTemplate(n.content, title) : '';
+}
+async function openDaily() {
+  const rel = momentFormat(new Date(), noteCfg.daily_format || 'YYYY-MM-DD');
+  const path = [noteCfg.daily_folder, rel].filter(Boolean).join('/') + '.md';
+  try { await api.note(path); return openNote(path) } catch (e) { if (e.status !== 404) return fail(e) }
+  const title = path.split('/').pop().replace(/\.md$/, '');
+  try {
+    const r = await api.create(folderOf(path), title, noteCfg.daily_template ? await templateText(noteCfg.daily_template, title) : '');
+    refreshSidebar();
+    openNote(r.path, { focusEnd: true });
+  } catch (e) { fail(e) }
+}
+// Palette rows: one per template in the templates folder, inserted at the cursor.
+async function templateRows() {
+  const l = await api.dir(templatesFolder()).catch(() => null);
+  return (l?.notes || []).filter(n => n.markdown).map(n => ({
+    kind: 'cmd', label: `Insert template: ${n.title}`, key: '',
+    run: async () => {
+      if (!cur) return toast('Open a note first.');
+      editor.insertAtCursor(await templateText(n.path, cur.title));
+      editor.focus();
+    },
+  }));
+}
+// "#" in the palette lists the open note's headings.
+function headingRows(q) {
+  if (!cur) return [];
+  const rows = [];
+  let fence = false, pos = 0;
+  for (const line of editor.text.split('\n')) {
+    if (/^\s*(```|~~~)/.test(line)) fence = !fence;
+    const h = !fence && /^(#{1,6})\s+(.+?)\s*#*$/.exec(line);
+    const at = pos;
+    if (h && h[2].toLowerCase().includes(q)) rows.push({ kind: 'cmd', label: '\u2003'.repeat(h[1].length - 1) + h[2], key: 'H' + h[1].length, run: () => editor.reveal(at) });
+    pos += line.length + 1;
+  }
+  return rows;
+}
+
 /* ---------- palette: one box to find notes, search text, and run commands ---------- */
 const COMMANDS = [
   ['New note', '⌘N', () => newNote()],
   ['New folder', '', () => { setSideTab('notes'); $('f-add').click() }],
+  ['Open today\u2019s daily note', '⌘⇧D', openDaily],
+  ['Insert template', '', () => openFind('>Insert template: ')],
+  ['Go to heading', '#', () => openFind('#')],
   ['Go home', '', goHome],
   ['Ask your notes', '⌘J', () => explore('ask')],
   ['Search everything', '⌘⇧F', () => explore('search')],
@@ -1016,8 +1080,15 @@ async function runPal() {
   const seq = ++palSeq;
   if (raw.startsWith('>')) {
     const q = raw.slice(1).trim().toLowerCase();
-    palRows = COMMANDS.filter(c => c[0].toLowerCase().includes(q)).map(c => ({ kind: 'cmd', label: c[0], key: c[1], run: c[2] }));
+    const rows = COMMANDS.map(c => ({ kind: 'cmd', label: c[0], key: c[1], run: c[2] })).concat(q.includes('templ') || q.length >= 3 ? await templateRows() : []);
+    if (seq !== palSeq) return;
+    palRows = rows.filter(c => c.label.toLowerCase().includes(q) && !(c.label === 'Insert template' && q.startsWith('insert template:')));
     return drawPal();
+  }
+  if (raw.startsWith('#') && cur) {
+    palRows = headingRows(raw.slice(1).trim().toLowerCase());
+    $('stat').textContent = `${palRows.length} ${palRows.length === 1 ? 'heading' : 'headings'} in ${cur.title}`;
+    return drawPal('Headings');
   }
   const q = raw.trim();
   const t0 = performance.now();
@@ -1046,7 +1117,7 @@ function drawPal(heading) {
   $('res').innerHTML = palRows.map((r, i) => {
     let head = '';
     if (r.kind !== lastKind) {
-      const label = { note: heading || 'Notes', text: 'In text', cmd: 'Commands', create: '' }[r.kind];
+      const label = { note: heading || 'Notes', text: 'In text', cmd: heading || 'Commands', create: '' }[r.kind];
       if (label) head = `<div class="group">${label}</div>`;
       lastKind = r.kind;
     }
@@ -1255,7 +1326,7 @@ const toggle = (key, on, label) => `<button class="switch${on ? ' on' : ''}" rol
 const srow = (label, hint, control) => `<div class="s-row"><div><b>${label}</b>${hint ? `<small>${hint}</small>` : ''}</div>${control}</div>`;
 function renderSettings() {
   const st = status || {};
-  const keys = [['⌘K', 'Find a note'], ['⌘N', 'New note'], ['⌘P', 'Commands'], ['⌘J', 'Ask your notes'], ['⌘G', 'Graph of this note'], ['⌘\\', 'Toggle sidebar'], ['⌘,', 'Settings']];
+  const keys = [['⌘K', 'Find a note'], ['⌘N', 'New note'], ['⌘⇧D', 'Today’s daily note'], ['⌘P', 'Commands'], ['⌘P #', 'Go to a heading'], ['⌘J', 'Ask your notes'], ['⌘G', 'Graph of this note'], ['⌘\\', 'Toggle sidebar'], ['⌘,', 'Settings']];
   $('settings-body').innerHTML = `
     <section><h3>Appearance</h3>
       ${srow('Theme', '', seg('theme', theme, [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']]))}
@@ -1374,6 +1445,7 @@ addEventListener('keydown', e => {
   else if (mod && k === 'p') { e.preventDefault(); openFind('>') }
   else if (mod && e.shiftKey && k === 'f') { e.preventDefault(); explore('search') }
   else if (mod && k === 'n') { e.preventDefault(); newNote() }
+  else if (mod && e.shiftKey && k === 'd') { e.preventDefault(); openDaily() }
   else if (e.altKey && e.code === 'KeyN') { e.preventDefault(); newNote() }
   else if (mod && k === 'g') { e.preventDefault(); explore('graph', cur?.path) }
   else if (mod && k === 'j') { e.preventDefault(); explore('ask') }
@@ -1446,6 +1518,7 @@ async function pollStatus() {
   ws = Object.assign({ tabs: [], active: 0, last: null }, boot.workspace || {});
   ws.tabs = (ws.tabs || []).filter(Boolean);
   if (boot.vault) setVaultName(boot.vault);
+  if (boot.notes) noteCfg = boot.notes;
   // First frame: the last note straight from disk, before the index is ready.
   if (boot.first) {
     if (!ws.tabs.includes(boot.first.path)) { ws.tabs = [boot.first.path]; ws.active = 0 }

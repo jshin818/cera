@@ -208,7 +208,31 @@ a local model or Claude, picked in Settings; with neither, sources only.
 - **Bench:** new row "Recall (cited passages for Ask)", 100 ms budget (no spec row). 10k-note vault on
   the M-series Mac: p50 2.5 ms, p95 3.2 ms with the hashed embedder. Existing rows unchanged.
 
+## Obsidian parity polish
+
+- **Daily notes and templates follow the vault's Obsidian settings.** `.obsidian/daily-notes.json`
+  (folder, moment.js format, template) and `templates.json` (folder) are read, never written; the
+  boot response carries them. ⌘⇧D opens or creates today's note; "Insert template" fills
+  `{{title}}`, `{{date}}`, `{{time}}` and `{{date:FORMAT}}`. Only the common moment tokens are
+  supported (YYYY YY MMMM MMM MM M DD D dddd ddd HH H mm ss and `[literal]`).
+- **`#` in the palette jumps to a heading** of the open note (code fences skipped).
+- **Live preview, Obsidian-style:** a block shows its Markdown only while the cursor is in it.
+  Tables render as tables (alignment and inline Markdown; a click puts the cursor in that cell).
+  Callouts get Obsidian's colors per type, and `-`/`+` callouts fold from a chevron (fold state is
+  per session, as in Obsidian). Code fences become a small language label. Bare URLs and `<…>`
+  autolinks open. `[^1]` reads as a superscript.
+- **Math via KaTeX 0.19.1** (MIT, the renderer Obsidian uses), loaded on the first note that has
+  math: script chunk, stylesheet and woff2 fonts are separate files in `ui/dist`, so startup is
+  unchanged. esbuild now splits chunks (`dist/chunks/`). The app's virtual-list class was renamed
+  `.vscroll` because KaTeX uses `.vlist`.
+- Fixed in passing: inline-code backticks never hid (the node's marks were skipped), palette
+  shortcut badges stretched across the row, embedded notes showed raw Markdown, a missing embedded
+  image showed a broken-image icon.
+
 ## Not done (later phases)
+
+- Obsidian gaps: code syntax highlighting, split panes, bookmarks, an outline panel, Mermaid,
+  Canvas files, `%%comments%%`, footnote definitions still read as link definitions.
 
 - Agents: change subscriptions, edit_section and set_properties tools, a write toggle and "what
   the agent changed" view with undo in Settings, an `.mcpb` bundle, `AGENTS.md` in the vault.

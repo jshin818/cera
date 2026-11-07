@@ -8,6 +8,7 @@ import { history, defaultKeymap, historyKeymap, indentMore, indentLess } from '@
 import { autocompletion, completionKeymap, startCompletion, completionStatus, currentCompletions } from '@codemirror/autocomplete';
 import { search, searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { tagColor } from './util.js';
+import { renderMarkdown } from './ask.js';
 
 /* ---------- Markdown extensions: [[wikilinks]], ![[embeds]], ==highlight==, #tags ---------- */
 const WikiExt = {
@@ -83,10 +84,95 @@ class BulletWidget extends WidgetType {
   eq(o) { return o.ch === this.ch }
   toDOM() { const s = document.createElement('span'); s.className = 'cm-bullet-dot'; s.textContent = this.ch; return s }
 }
+// A callout's title line. Foldable callouts ("> [!note]-") get a chevron that opens and closes them.
 class LabelWidget extends WidgetType {
-  constructor(text) { super(); this.text = text }
-  eq(o) { return o.text === this.text }
-  toDOM() { const s = document.createElement('span'); s.className = 'cm-callout-label'; s.textContent = this.text; return s }
+  constructor(text, fold, pos) { super(); this.text = text; this.fold = fold; this.pos = pos }
+  eq(o) { return o.text === this.text && o.fold === this.fold && o.pos === this.pos }
+  toDOM(view) {
+    const s = document.createElement('span');
+    s.className = 'cm-callout-label' + (this.fold ? ' foldable' + (this.fold === 'closed' ? ' closed' : '') : '');
+    s.textContent = this.text;
+    if (this.fold) {
+      s.setAttribute('role', 'button');
+      s.setAttribute('aria-expanded', String(this.fold === 'open'));
+      s.onmousedown = e => { e.preventDefault(); view.dispatch({ effects: foldToggle.of(this.pos) }) };
+    }
+    return s;
+  }
+  ignoreEvent() { return !!this.fold }
+}
+// $math$ and $$math$$ through KaTeX, which loads (script, styles, fonts) the first time a note shows math.
+let katex = null, katexLoading = null;
+const mathReady = StateEffect.define();
+function loadKatex(view) {
+  katexLoading ??= Promise.all([
+    import('katex'),
+    new Promise(ok => { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = 'katex/katex.css'; l.onload = l.onerror = ok; document.head.append(l) }),
+  ]).then(([m]) => { katex = m.default });
+  katexLoading.then(() => view.dispatch({ effects: mathReady.of(null) })).catch(() => {});
+}
+class MathWidget extends WidgetType {
+  constructor(tex, display) { super(); this.tex = tex; this.display = display; this.ready = !!katex }
+  eq(o) { return o.tex === this.tex && o.display === this.display && o.ready === this.ready }
+  toDOM(view) {
+    const el = document.createElement(this.display ? 'div' : 'span');
+    el.className = this.display ? 'cm-math-block' : 'cm-math-inline';
+    if (katex) katex.render(this.tex, el, { displayMode: this.display, throwOnError: false, output: 'htmlAndMathml' });
+    else { el.textContent = this.tex; el.classList.add('cm-math'); loadKatex(view) }
+    return el;
+  }
+}
+class LangWidget extends WidgetType {
+  constructor(lang) { super(); this.lang = lang }
+  eq(o) { return o.lang === this.lang }
+  toDOM() { const s = document.createElement('span'); s.className = 'cm-code-lang'; s.textContent = this.lang; return s }
+}
+// A GFM table drawn as a table while the cursor is elsewhere. A click puts the cursor in that cell.
+class TableWidget extends WidgetType {
+  constructor(text, from) { super(); this.text = text; this.from = from }
+  eq(o) { return o.text === this.text && o.from === this.from }
+  toDOM(view) {
+    const lines = this.text.split('\n');
+    const cells = l => { const t = l.trim().replace(/^\|/, '').replace(/\|$/, ''); return t.split(/(?<!\\)\|/).map(c => c.trim()) };
+    const align = cells(lines[1] || '').map(c => (/^:-+:$/.test(c) ? 'center' : /-+:$/.test(c) ? 'right' : ''));
+    const wrap = document.createElement('div');
+    wrap.className = 'cm-table-wrap';
+    const table = document.createElement('table');
+    lines.forEach((l, i) => {
+      if (i === 1) return;
+      const tr = document.createElement('tr');
+      cells(l).forEach((c, j) => {
+        const td = document.createElement(i === 0 ? 'th' : 'td');
+        td.innerHTML = inlineHtml(c);
+        if (align[j]) td.style.textAlign = align[j];
+        td.onmousedown = e => {
+          if (e.target.closest('.cm-wikilink, .cm-url')) return;
+          e.preventDefault();
+          e.stopPropagation();
+          const lineStart = this.from + lines.slice(0, i).reduce((n, x) => n + x.length + 1, 0);
+          const at = l.indexOf(c, l.split('|', j + 1).join('|').length);
+          view.focus();
+          view.dispatch({ selection: { anchor: lineStart + Math.max(0, at) + c.length } });
+        };
+        tr.append(td);
+      });
+      table.append(tr);
+    });
+    wrap.append(table);
+    return wrap;
+  }
+  ignoreEvent(e) { return e.type !== 'mousedown' }
+}
+// Inline Markdown inside a table cell, as safe HTML.
+function inlineHtml(t) {
+  return esc(t)
+    .replace(/`([^`]+)`/g, '<code class="cm-icode">$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+    .replace(/(^|[^*])\*([^*]+)\*/g, '$1<i>$2</i>')
+    .replace(/==([^=]+)==/g, '<mark class="cm-hl">$1</mark>')
+    .replace(/~~([^~]+)~~/g, '<s>$1</s>')
+    .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, t, l) => `<span class="cm-wikilink" data-target="${t}">${l || t}</span>`)
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<span class="cm-url" data-href="$2">$1</span>');
 }
 class HrWidget extends WidgetType {
   eq() { return true }
@@ -106,12 +192,17 @@ class EmbedWidget extends WidgetType {
         const img = document.createElement('img');
         img.src = '/file/' + path.split('/').map(encodeURIComponent).join('/');
         img.alt = t; img.loading = 'lazy';
+        img.onerror = () => { wrap.className = 'cm-embed note'; wrap.innerHTML = `<b>${esc(t)}</b>Can’t show this image` };
         const w = /\|(\d+)/.exec(this.target);
         if (w) img.style.width = w[1] + 'px';
         wrap.append(img);
       } else if (/\.md$/i.test(path) || !/\.\w+$/.test(path)) {
         wrap.className = 'cm-embed note';
-        this.opts.excerpt(path, this.target.split('#')[1]).then(text => { wrap.innerHTML = `<b>${esc(path.replace(/\.md$/, '').split('/').pop())}</b>${esc(text)}` });
+        this.opts.excerpt(path, this.target.split('#')[1]).then(text => {
+          // The embedded section reads as rendered Markdown; its links open like any other.
+          wrap.innerHTML = `<b>${esc(path.replace(/\.md$/, '').split('/').pop())}</b>${renderMarkdown(text)}`;
+          for (const b of wrap.querySelectorAll('.wl')) { const l = document.createElement('span'); l.className = 'cm-wikilink'; l.dataset.target = b.dataset.link; l.textContent = b.textContent; b.replaceWith(l) }
+        });
       } else {
         wrap.className = 'cm-embed note';
         wrap.innerHTML = `<b>${esc(t)}</b><a href="/file/${path.split('/').map(encodeURIComponent).join('/')}" target="_blank">Open file</a>`;
@@ -136,6 +227,23 @@ function activeLines(state) {
   }
   return set;
 }
+
+// Callouts the reader opened or closed, by the position of their first line.
+const foldToggle = StateEffect.define();
+const foldField = StateField.define({
+  create: () => new Set(),
+  update(v, tr) {
+    let next = v;
+    if (tr.docChanged && v.size) next = new Set([...v].map(p => tr.changes.mapPos(p)));
+    for (const e of tr.effects) if (e.is(foldToggle)) { next = new Set(next); next.has(e.value) ? next.delete(e.value) : next.add(e.value) }
+    return next;
+  },
+});
+const CALLOUT_KIND = {
+  note: 'blue', info: 'blue', todo: 'blue', abstract: 'teal', summary: 'teal', tldr: 'teal', tip: 'teal', hint: 'teal', important: 'teal',
+  success: 'green', check: 'green', done: 'green', question: 'yellow', help: 'yellow', faq: 'yellow', warning: 'orange', caution: 'orange',
+  attention: 'orange', failure: 'red', fail: 'red', missing: 'red', danger: 'red', error: 'red', bug: 'red', example: 'purple', quote: 'gray', cite: 'gray',
+};
 
 const focusEffect = StateEffect.define();
 const focusField = StateField.define({
@@ -181,6 +289,7 @@ function buildDecorations(state, opts) {
   }
   let skipUntil = -1;
   let skipFrom = -1;
+  const codeRanges = [];
   syntaxTree(state).iterate({
     enter(node) {
       const { from, to, name } = node;
@@ -210,7 +319,9 @@ function buildDecorations(state, opts) {
           if (!act) { add(from, from + 2, hide); add(to - 2, to, hide) }
           break;
         case 'InlineCode':
+          codeRanges.push([from, to]);
           add(from, to, Decoration.mark({ class: 'cm-icode' }));
+          if (!act) for (const m of node.node.getChildren('CodeMark')) add(m.from, m.to, hide);
           return false;
         case 'CodeMark':
           if (node.node.parent?.name === 'InlineCode') { if (!act) add(from, to, hide) }
@@ -219,26 +330,36 @@ function buildDecorations(state, opts) {
         case 'FencedCode': case 'CodeBlock': {
           const first = doc.lineAt(from).number, last = doc.lineAt(to).number;
           for (let i = first; i <= last; i++) lineDeco(doc.line(i).from, 'cm-codeline' + (i === first ? ' cm-codeline-first' : '') + (i === last ? ' cm-codeline-last' : ''));
+          codeRanges.push([from, to]);
           if (name === 'FencedCode') {
             const info = node.node.getChild('CodeInfo');
-            if (info) add(info.from, info.to, Decoration.mark({ class: 'cm-mark' }));
+            const blockActive = [...Array(last - first + 1)].some((_, k) => active.has(first + k));
+            if (!blockActive) {
+              // The ``` fences step aside for a small language label, as in Obsidian's reading view.
+              const fl = doc.line(first), ll = doc.line(last);
+              add(fl.from, fl.to, Decoration.replace({ widget: new LangWidget(info ? doc.sliceString(info.from, info.to) : '') }));
+              if (last > first && /^\s*(```|~~~)/.test(ll.text)) { add(ll.from, ll.to, hide); lineDeco(ll.from, 'cm-fence-end') }
+            } else if (info) add(info.from, info.to, Decoration.mark({ class: 'cm-mark' }));
           }
           return false;
         }
         case 'Blockquote': {
           const first = doc.lineAt(from).number, last = doc.lineAt(to).number;
           const firstLine = doc.line(first);
-          const cm = /^>\s*\[!([\w-]+)\][+-]?\s*(.*)$/.exec(firstLine.text);
-          for (let i = first; i <= last; i++) lineDeco(doc.line(i).from, cm ? 'cm-quote cm-callout' : 'cm-quote');
-          if (cm && !active.has(first)) {
-            // "> [!note] Title" renders as a small label; the marker reappears when editing the line.
-            const at = firstLine.from + firstLine.text.indexOf('[!');
-            const endMarker = firstLine.text.indexOf(']', at - firstLine.from) + firstLine.from + 1;
-            const label = cm[2] || cm[1][0].toUpperCase() + cm[1].slice(1);
-            add(firstLine.from, firstLine.to, Decoration.replace({ widget: new LabelWidget(label) }));
-            void at;
-            void endMarker;
-            skipUntil = firstLine.to;
+          const cm = /^>\s*\[!([\w-]+)\]([+-]?)\s*(.*)$/.exec(firstLine.text);
+          const color = cm ? CALLOUT_KIND[cm[1].toLowerCase()] || 'blue' : '';
+          for (let i = first; i <= last; i++) lineDeco(doc.line(i).from, cm ? `cm-quote cm-callout cm-c-${color}${i === first ? ' cm-callout-first' : ''}${i === last ? ' cm-callout-last' : ''}` : 'cm-quote');
+          const calloutActive = [...Array(last - first + 1)].some((_, k) => active.has(first + k));
+          if (cm && !calloutActive) {
+            // "> [!note] Title" renders as its title; the marker reappears when editing the callout.
+            // "-" starts folded and "+" open; the chevron flips either one.
+            const fold = cm[2] ? ((cm[2] === '-') !== state.field(foldField).has(firstLine.from) ? 'closed' : 'open') : '';
+            const label = cm[3] || cm[1][0].toUpperCase() + cm[1].slice(1);
+            add(firstLine.from, firstLine.to, Decoration.replace({ widget: new LabelWidget(label, fold, firstLine.from) }));
+            if (fold === 'closed' && last > first) {
+              add(firstLine.to, doc.line(last).to, hide);
+              skipUntil = doc.line(last).to;
+            } else skipUntil = firstLine.to;
             skipFrom = firstLine.from;
           }
           break;
@@ -316,15 +437,57 @@ function buildDecorations(state, opts) {
           add(from, to, Decoration.mark({ class: 'cm-tag', attributes: { 'data-c': String(tagColor(tag)), 'data-tag': tag } }));
           return false;
         }
-        case 'Table':
-          for (let i = doc.lineAt(from).number; i <= doc.lineAt(to).number; i++) lineDeco(doc.line(i).from, 'cm-table');
+        case 'URL': {
+          // A bare https://… link (GFM autolink) opens like any other link.
+          const parent = node.node.parent?.name;
+          if (parent !== 'Link' && parent !== 'Image') add(from, to, Decoration.mark({ class: 'cm-url', attributes: { 'data-href': doc.sliceString(from, to) } }));
           return false;
+        }
+        case 'Autolink': {
+          const url = node.node.getChild('URL');
+          if (url) add(url.from, url.to, Decoration.mark({ class: 'cm-url', attributes: { 'data-href': doc.sliceString(url.from, url.to) } }));
+          if (!act) { add(from, from + 1, hide); add(to - 1, to, hide) }
+          return false;
+        }
+        case 'Table': {
+          const first = doc.lineAt(from).number, last = doc.lineAt(to).number;
+          const tableActive = [...Array(last - first + 1)].some((_, k) => active.has(first + k));
+          if (!tableActive && last > first) {
+            const a = doc.line(first).from, b = doc.line(last).to;
+            add(a, b, Decoration.replace({ widget: new TableWidget(doc.sliceString(a, b), a), block: true }));
+          } else for (let i = first; i <= last; i++) lineDeco(doc.line(i).from, 'cm-table');
+          return false;
+        }
       }
     },
   });
   // Block ids (^id at line end) are dimmed.
   const text = doc.toString();
   for (const m of text.matchAll(/ \^[A-Za-z0-9-]+$/gm)) add(m.index + 1, m.index + m[0].length, Decoration.mark({ class: 'cm-blockid' }));
+  // Footnotes and math, outside code: [^1] reads as a superscript, [^1]: as a dim label, $…$ as math.
+  const inCode = i => codeRanges.some(([a, b]) => i >= a && i < b) || (fm && i < fm.to);
+  for (const m of text.matchAll(/\[\^([^\]\s]+)\](:)?/g)) {
+    if (inCode(m.index)) continue;
+    const a = m.index, b = a + m[0].length;
+    const def = m[2] && (a === 0 || text[a - 1] === '\n');
+    if (def) { add(a, b, Decoration.mark({ class: 'cm-fndef' })); continue }
+    add(a, b, Decoration.mark({ class: 'cm-fnref' }));
+    if (!lineActive(a)) { add(a, a + 2, hide); add(b - 1, b, hide) }
+  }
+  // Math renders while the cursor is elsewhere and turns back into TeX on the line being edited.
+  for (const m of text.matchAll(/(?<![\\$\w])\$(?!\s)([^$\n]+?)(?<!\s)\$(?![\w$])/g)) {
+    if (inCode(m.index)) continue;
+    const a = m.index, b = a + m[0].length;
+    add(a, b, lineActive(a) ? Decoration.mark({ class: 'cm-math' }) : Decoration.replace({ widget: new MathWidget(m[1], false) }));
+  }
+  for (const m of text.matchAll(/^\$\$(?:\n([\s\S]*?)\n|([^\n]+?))\$\$$/gm)) {
+    if (inCode(m.index)) continue;
+    const a = m.index, b = a + m[0].length;
+    const first = doc.lineAt(a).number, last = doc.lineAt(b).number;
+    if ([...Array(last - first + 1)].some((_, k) => active.has(first + k))) {
+      for (let i = first; i <= last; i++) lineDeco(doc.line(i).from, 'cm-mathblock');
+    } else add(a, b, Decoration.replace({ widget: new MathWidget(m[1] ?? m[2], true), block: true }));
+  }
 
   try {
     return Decoration.set(ranges, true);
@@ -347,7 +510,7 @@ function livePreview(opts) {
   return StateField.define({
     create: state => buildDecorations(state, opts),
     update(deco, tr) {
-      if (tr.docChanged || tr.selection || tr.effects.some(e => e.is(resolvedEffect) || e.is(focusEffect)) || syntaxTree(tr.state) !== syntaxTree(tr.startState)) {
+      if (tr.docChanged || tr.selection || tr.effects.some(e => e.is(resolvedEffect) || e.is(focusEffect) || e.is(foldToggle) || e.is(mathReady)) || syntaxTree(tr.state) !== syntaxTree(tr.startState)) {
         return buildDecorations(tr.state, opts);
       }
       return deco.map(tr.changes);
@@ -529,6 +692,7 @@ export function createEditor(parent, opts) {
       indentUnit.of('    '),
       markdown({ base: markdownLanguage, extensions: [WikiExt], addKeymap: true }),
       focusField,
+      foldField,
       livePreview(decoOpts),
       highlightSelectionMatches(),
       search({ top: true }),

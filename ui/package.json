@@ -20,6 +20,7 @@
     "@fontsource/inter": "5.2.6",
     "@lezer/highlight": "1.2.1",
     "@lezer/markdown": "1.4.3",
-    "esbuild": "0.25.10"
+    "esbuild": "0.25.10",
+    "katex": "0.19.1"
   }
 }

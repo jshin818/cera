@@ -298,7 +298,9 @@ async fn boot(State(app): State<App>) -> ApiResult {
     blocking(&app, |e| {
         let ws = e.workspace();
         let first = ws.get("last").and_then(|v| v.as_str()).and_then(|p| e.read_note(p).ok());
-        Ok(json!({"workspace": ws, "first": first, "status": e.status(), "vault": e.root().file_name().and_then(|s| s.to_str()).unwrap_or("Vault")}))
+        let o = e.obsidian();
+        let notes = json!({"daily_folder": o.daily_folder, "daily_format": o.daily_format, "daily_template": o.daily_template, "templates_folder": o.templates_folder});
+        Ok(json!({"workspace": ws, "first": first, "status": e.status(), "vault": e.root().file_name().and_then(|s| s.to_str()).unwrap_or("Vault"), "notes": notes}))
     })
     .await
 }

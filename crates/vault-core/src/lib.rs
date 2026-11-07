@@ -343,6 +343,11 @@ impl Engine {
         &self.0.root
     }
 
+    /// What the vault's `.obsidian/` settings say (read once, at open).
+    pub fn obsidian(&self) -> &vault_fs::ObsidianConfig {
+        &self.0.cfg
+    }
+
     /// The vault's cache folder (`.vault/`).
     pub fn app_dir(&self) -> &Path {
         &self.0.app_dir

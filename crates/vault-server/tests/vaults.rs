@@ -120,3 +120,17 @@ async fn a_vault_in_use_stays_put_and_reports_why() {
     busy.shutdown();
     e.shutdown();
 }
+
+#[tokio::test]
+async fn boot_carries_the_vaults_daily_note_and_template_settings() {
+    let a = vault_dir("a");
+    std::fs::create_dir(a.path().join(".obsidian")).unwrap();
+    std::fs::write(a.path().join(".obsidian/daily-notes.json"), r#"{"folder":"Journal","format":"DD.MM.YYYY","template":"Tpl/Day"}"#).unwrap();
+    std::fs::write(a.path().join(".obsidian/templates.json"), r#"{"folder":"Tpl"}"#).unwrap();
+    let e = open(a.path());
+    let app = router(e.clone(), None);
+    let (s, v) = call(&app, "GET", "/api/boot", None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["notes"], json!({ "daily_folder": "Journal", "daily_format": "DD.MM.YYYY", "daily_template": "Tpl/Day", "templates_folder": "Tpl" }));
+    e.shutdown();
+}

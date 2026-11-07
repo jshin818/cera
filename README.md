@@ -9,7 +9,10 @@ and everything else (search index, embeddings, graph) is a rebuildable cache in 
 - Backlinks, unlinked mentions with one-click linking, related notes, link and tag suggestions,
   near-duplicate warnings, Leiden topic clusters, a graph view, vault stats.
 - Obsidian-compatible: `[[links]]`, `[[note#heading]]`, `[[note#^block]]`, `![[embeds]]`, aliases,
-  nested `#tags`, frontmatter, `.obsidian/app.json` ignore filters and attachment folder.
+  nested `#tags`, frontmatter, `.obsidian/app.json` ignore filters and attachment folder, daily
+  notes and templates (`.obsidian/daily-notes.json`, `templates.json`).
+- Live preview renders tables, callouts (typed and foldable), code blocks, footnotes, bare links
+  and `$math$` (KaTeX); the line you're editing shows its Markdown.
 - No cloud. Embeddings run locally (Model2Vec static models, or a built-in hashed fallback).
 
 ## Run it on the Mac (Apple Silicon)
@@ -107,7 +110,8 @@ While the Cēra app is open, `vault mcp` goes through it; otherwise pass the vau
 | Keys | Action |
 | --- | --- |
 | ⌘K / ⌘O | Find or create a note, search text |
-| ⌘P | Commands |
+| ⌘P | Commands (type `#` to jump to a heading in this note) |
+| ⌘⇧D | Today's daily note |
 | ⌘⇧F | Search view (meaning + words, or exact words) |
 | ⌘N | New note |
 | ⌘J | Ask your notes |

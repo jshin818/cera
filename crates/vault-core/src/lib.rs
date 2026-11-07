@@ -12,10 +12,12 @@ pub mod intern;
 mod ops;
 mod persist;
 mod query;
+mod recall;
 mod state;
 
 pub use ops::{NoteView, SaveOutcome, first_frame, safe_name};
 pub use query::*;
+pub use recall::{Connection, Gap, Passage, Recall, RecallOptions, ymd};
 pub use state::{Entry, OutLink, Snapshot};
 pub use vault_parse::Subpath;
 
@@ -339,6 +341,11 @@ impl Engine {
 
     pub fn root(&self) -> &Path {
         &self.0.root
+    }
+
+    /// What the vault's `.obsidian/` settings say (read once, at open).
+    pub fn obsidian(&self) -> &vault_fs::ObsidianConfig {
+        &self.0.cfg
     }
 
     /// The vault's cache folder (`.vault/`).

@@ -43,6 +43,34 @@ export const api = {
   dupes: () => req('GET', '/api/dupes'),
   workspace: ws => req('PUT', '/api/workspace', ws),
   rescan: () => req('POST', '/api/rescan'),
+  recall: (qq, limit) => req('GET', `/api/recall?${q({ q: qq, limit })}`),
+  ai: () => req('GET', '/api/ai'),
+  setAi: patch => req('PUT', '/api/ai', patch),
+  aiModels: (url, kind) => req('GET', `/api/ai/models?${q({ url, kind })}`),
+  // Streams an answer: calls on(event, data) for sources, model, delta, done and error.
+  async ask(body, on, signal) {
+    const r = await fetch('/api/ask', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), credentials: 'same-origin', signal });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).message || r.statusText);
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+      let i;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const block = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+        let ev = 'message', data = '';
+        for (const l of block.split('\n')) {
+          if (l.startsWith('event:')) ev = l.slice(6).trim();
+          else if (l.startsWith('data:')) data += l.slice(5).trimStart();
+        }
+        if (data) on(ev, JSON.parse(data));
+      }
+    }
+  },
   async upload(note, file) {
     const r = await fetch(`/api/attachment?${q({ note, name: file.name || 'pasted.png' })}`, { method: 'POST', body: file, credentials: 'same-origin' });
     if (!r.ok) throw new Error('upload failed');

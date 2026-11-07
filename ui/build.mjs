@@ -1,6 +1,6 @@
 // Bundles the UI into dist/ (served by vault-server, embedded into the binary at compile time).
 import * as esbuild from 'esbuild';
-import { cpSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, readdirSync } from 'node:fs';
 
 const watch = process.argv.includes('--watch');
 rmSync('dist', { recursive: true, force: true });
@@ -23,15 +23,21 @@ for (const [pkg, family, weights] of [['inter', 'Inter', [400, 500, 600, 700]], 
   }
 }
 writeFileSync('dist/fonts.css', faces.join('\n'));
+// KaTeX for $math$, loaded only when a note has math. woff2 is the only font format WebKit needs.
+mkdirSync('dist/katex/fonts', { recursive: true });
+cpSync('node_modules/katex/dist/katex.min.css', 'dist/katex/katex.css');
+for (const f of readdirSync('node_modules/katex/dist/fonts')) if (f.endsWith('.woff2')) cpSync(`node_modules/katex/dist/fonts/${f}`, `dist/katex/fonts/${f}`);
 cpSync('src/index.html', 'dist/index.html');
 cpSync('src/styles.css', 'dist/styles.css');
 
 const opts = {
-  entryPoints: ['src/main.js'],
+  entryPoints: { app: 'src/main.js' },
   bundle: true,
   format: 'esm',
+  splitting: true,
+  chunkNames: 'chunks/[name]-[hash]',
   target: ['safari16', 'chrome115'],
-  outfile: 'dist/app.js',
+  outdir: 'dist',
   minify: !watch,
   sourcemap: watch ? 'inline' : false,
   legalComments: 'none',

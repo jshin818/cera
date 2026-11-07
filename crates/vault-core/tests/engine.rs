@@ -209,3 +209,43 @@ fn move_folder_into_another_folder() {
     assert!(matches!(e.rename_folder("Archive/Projects", "People"), Err(vault_core::CoreError::Exists(_))));
     e.shutdown();
 }
+
+#[test]
+fn recall_cites_passages_with_sources_and_gaps() {
+    let d = sample();
+    let e = open(d.path(), false);
+    assert!(e.wait_embeddings(Duration::from_secs(20)));
+    let opts = vault_core::RecallOptions::default();
+
+    let r = e.recall("What did we decide about shipping the beta?", &opts).unwrap();
+    let top = &r.passages[0];
+    assert_eq!(top.note.path, "Projects/Beta.md", "{:#?}", r.passages);
+    assert_eq!(top.n, 1);
+    assert!(top.text.contains("We decided to ship"), "{top:?}");
+    // The cited range is the exact text in the file, and the line number points at it.
+    let src = std::fs::read_to_string(d.path().join("Projects/Beta.md")).unwrap();
+    assert_eq!(&src[top.start as usize..top.end as usize], top.text);
+    assert_eq!(src.lines().nth(top.line as usize - 1).unwrap().trim(), top.text.lines().next().unwrap().trim());
+    assert!(top.why.iter().any(|w| w.starts_with("matches")), "{:?}", top.why);
+    // Home links to Beta and is pulled in as a neighbour; the connection between them is reported.
+    assert!(r.passages.iter().any(|p| p.note.path == "Home.md"), "{:#?}", r.passages);
+    assert!(r.connections.iter().any(|c| c.from == "Home.md" && c.to == "Projects/Beta.md"), "{:?}", r.connections);
+    let ctx = r.context_text();
+    assert!(ctx.starts_with("[1] Projects/Beta.md"), "{ctx}");
+
+    // Filters scope the recall.
+    let r = e.recall("ship tag:project", &opts).unwrap();
+    assert!(r.passages.iter().all(|p| p.tags.iter().any(|t| t.starts_with("project"))), "{:#?}", r.passages);
+
+    // A link to a note that was never written shows up as a gap when it touches the question.
+    let r = e.recall("missing note", &opts).unwrap();
+    assert!(r.gaps.iter().any(|g| g.kind == "missing_note" && g.message.contains("Missing Note")), "{:?}", r.gaps);
+
+    // Nothing relevant: no passages, and the gap says so.
+    let r = e.recall("xylophone quasar", &opts).unwrap();
+    assert!(r.passages.is_empty() || r.gaps.iter().any(|g| g.kind == "weak"), "{:#?}", r);
+    if r.passages.is_empty() {
+        assert_eq!(r.gaps[0].kind, "nothing");
+    }
+    e.shutdown();
+}

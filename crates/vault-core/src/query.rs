@@ -141,7 +141,7 @@ pub struct VaultStats {
     pub activity: Vec<u32>,
 }
 
-fn note_ref(e: &crate::Entry) -> NoteRef {
+pub(crate) fn note_ref(e: &crate::Entry) -> NoteRef {
     NoteRef { id: e.id, path: e.path.clone(), title: e.title.clone() }
 }
 
@@ -163,7 +163,7 @@ fn line_around(src: &str, start: usize, end: usize) -> String {
 }
 
 impl Engine {
-    fn read_src(&self, path: &str) -> Option<String> {
+    pub(crate) fn read_src(&self, path: &str) -> Option<String> {
         vault_fs::read(&self.0.root, path).ok().map(|b| String::from_utf8_lossy(&b).into_owned())
     }
 
@@ -826,7 +826,7 @@ impl Engine {
     }
 }
 
-fn passes_filters(e: &crate::Entry, pq: &vault_search::ParsedQuery) -> bool {
+pub(crate) fn passes_filters(e: &crate::Entry, pq: &vault_search::ParsedQuery) -> bool {
     use vault_search::Clause;
     let tag_ok = |t: &str| e.tags.iter().any(|x| x == t || x.starts_with(&format!("{t}/")));
     let path_ok = |p: &str| {

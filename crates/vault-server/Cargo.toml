@@ -18,6 +18,9 @@ tracing.workspace = true
 rand.workspace = true
 futures-util = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }
+parking_lot.workspace = true
+# Answer models: HTTPS to the Claude API, plain HTTP to a local server. rustls is reqwest's default TLS.
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "http2", "charset", "stream", "json"] }
 
 [dev-dependencies]
 tempfile.workspace = true

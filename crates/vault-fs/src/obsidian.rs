@@ -1,4 +1,5 @@
-//! Read-only view of `.obsidian/app.json`. Vault never writes inside `.obsidian/`.
+//! Read-only view of `.obsidian/app.json`, `daily-notes.json` and `templates.json`. Vault never
+//! writes inside `.obsidian/`.
 
 use std::path::Path;
 
@@ -8,24 +9,45 @@ pub struct ObsidianConfig {
     pub ignore_filters: Vec<String>,
     /// `attachmentFolderPath`: "/" = vault root, "./" = same folder as note, "./sub" = subfolder of note, else a vault folder.
     pub attachment_folder: Option<String>,
+    /// Daily notes core plugin (`daily-notes.json`): folder, moment.js date format, template note.
+    pub daily_folder: String,
+    pub daily_format: String,
+    pub daily_template: String,
+    /// Templates core plugin (`templates.json`): the folder that holds templates.
+    pub templates_folder: String,
+}
+
+fn read_json(root: &Path, name: &str) -> Option<serde_json::Value> {
+    let text = std::fs::read_to_string(root.join(".obsidian").join(name)).ok()?;
+    let v = serde_json::from_str(&text).ok();
+    if v.is_none() {
+        tracing::warn!("could not parse .obsidian/{name}; ignoring it");
+    }
+    v
 }
 
 impl ObsidianConfig {
     pub fn load(root: &Path) -> ObsidianConfig {
-        let Ok(text) = std::fs::read_to_string(root.join(".obsidian").join("app.json")) else {
-            return ObsidianConfig::default();
+        let v = read_json(root, "app.json").unwrap_or_default();
+        let s = |v: &Option<serde_json::Value>, k: &str| {
+            v.as_ref().and_then(|v| v.get(k)?.as_str()).map(|s| s.trim().trim_matches('/').to_string()).unwrap_or_default()
         };
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
-            tracing::warn!("could not parse .obsidian/app.json; ignoring it");
-            return ObsidianConfig::default();
-        };
+        let daily = read_json(root, "daily-notes.json");
+        let templates = read_json(root, "templates.json");
         let ignore_filters = v
             .get("userIgnoreFilters")
             .and_then(|f| f.as_array())
             .map(|a| a.iter().filter_map(|s| s.as_str()).map(|s| s.trim_end_matches('/').to_string()).collect())
             .unwrap_or_default();
         let attachment_folder = v.get("attachmentFolderPath").and_then(|s| s.as_str()).map(str::to_string);
-        ObsidianConfig { ignore_filters, attachment_folder }
+        ObsidianConfig {
+            ignore_filters,
+            attachment_folder,
+            daily_folder: s(&daily, "folder"),
+            daily_format: s(&daily, "format"),
+            daily_template: s(&daily, "template"),
+            templates_folder: s(&templates, "folder"),
+        }
     }
 
     pub fn is_user_ignored(&self, rel: &str) -> bool {
@@ -64,5 +86,21 @@ mod tests {
         assert!(!c.is_user_ignored("Archived.md"));
         assert_eq!(c.attachment_dir_for("a/b.md"), "a/assets");
         assert_eq!(c.attachment_dir_for("b.md"), "assets");
+        assert_eq!((c.daily_folder.as_str(), c.templates_folder.as_str()), ("", ""));
+    }
+
+    #[test]
+    fn reads_daily_notes_and_templates() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join(".obsidian")).unwrap();
+        std::fs::write(d.path().join(".obsidian/daily-notes.json"), r#"{"folder":"Journal/","format":"YYYY/MM/YYYY-MM-DD","template":"Templates/Day"}"#)
+            .unwrap();
+        std::fs::write(d.path().join(".obsidian/templates.json"), r#"{"folder":"Templates"}"#).unwrap();
+        let c = ObsidianConfig::load(d.path());
+        assert_eq!(c.daily_folder, "Journal");
+        assert_eq!(c.daily_format, "YYYY/MM/YYYY-MM-DD");
+        assert_eq!(c.daily_template, "Templates/Day");
+        assert_eq!(c.templates_folder, "Templates");
+        assert!(c.ignore_filters.is_empty());
     }
 }

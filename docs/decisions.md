@@ -183,8 +183,15 @@ a local model or Claude, picked in Settings; with neither, sources only.
   server-side fallback on for Opus/Sonnet 5.5. Local is any OpenAI-compatible server on loopback
   (Ollama, LM Studio); other hosts are refused. The prompt carries only the numbered passages and
   asks for `[n]` citations and for gaps to be said, not filled.
-- **The key never lives in the vault.** `<config>/Cera/ai.json` (mode 0600, atomic write), or
-  `ANTHROPIC_API_KEY`. The API reports `has_key`/`key_source`, never the key. `CERA_CONFIG_DIR`
+- **Any API key, not just Claude's.** The owner asked for Claude, Ollama and hosted open models
+  (Groq and the like) side by side. The `api` provider is any OpenAI-compatible chat-completions
+  API with a bearer key: presets for Groq (the default), OpenRouter, Together, OpenAI, Mistral and
+  DeepSeek, or any other URL up to its version (`…/v1`). Hosted URLs must be https, since they get
+  the key; plain http is allowed only on loopback. The model is picked from the service's
+  `/models` list and never guessed (lists include speech and guard models); changing the URL
+  clears it. Auto tries Claude, then the API, then a local server.
+- **Keys never live in the vault.** `<config>/Cera/ai.json` (mode 0600, atomic write), or
+  `ANTHROPIC_API_KEY`. The API reports `has_key`/`key_source`/`has_api_key`, never a key. `CERA_CONFIG_DIR`
   overrides the folder.
 - **Ask reads as one column of text.** The owner asked for a chat-like page with no side panel and
   minimal chrome. Citations are pills inside the answer, named by the note (a leading date is

@@ -46,7 +46,7 @@ export const api = {
   recall: (qq, limit) => req('GET', `/api/recall?${q({ q: qq, limit })}`),
   ai: () => req('GET', '/api/ai'),
   setAi: patch => req('PUT', '/api/ai', patch),
-  aiModels: url => req('GET', `/api/ai/models?${q({ url })}`),
+  aiModels: (url, kind) => req('GET', `/api/ai/models?${q({ url, kind })}`),
   // Streams an answer: calls on(event, data) for sources, model, delta, done and error.
   async ask(body, on, signal) {
     const r = await fetch('/api/ask', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), credentials: 'same-origin', signal });

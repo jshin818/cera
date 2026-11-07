@@ -353,6 +353,7 @@ body.no-counts .f-count { display: none }
 .s-row small { display: block; color: var(--faint); font-size: 12.5px; line-height: 1.4 }
 .s-row .seg { flex: none }
 .s-row .seg button { height: 26px; padding: 0 11px; font-size: 12.5px }
+.s-sub { margin: 14px 0 0; font-size: 12px; font-weight: 500; color: var(--faint) }
 .s-note { margin: 2px 0 6px; color: var(--faint); font-size: 12.5px; line-height: 1.5 }
 .s-note code { font: 11.5px var(--mono); padding: 1px 4px; background: var(--subtle); border-radius: 4px; color: var(--muted) }
 .s-keys { display: grid; grid-template-columns: 1fr auto; gap: 8px 16px; align-items: center; padding: 6px 0 4px; color: var(--muted); font-size: 13px }

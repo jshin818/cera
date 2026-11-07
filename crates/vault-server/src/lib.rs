@@ -589,10 +589,20 @@ async fn ai_put(State(app): State<App>, Json(patch): Json<Value>) -> ApiResult {
 #[derive(Deserialize)]
 struct UrlQ {
     url: Option<String>,
+    /// `api` for the hosted API (with the saved key); otherwise the local server.
+    kind: Option<String>,
 }
 
-/// Models a local server offers. `reachable: false` when nothing answers at the URL.
+/// Models a local server offers, or with `kind=api` the hosted API offers the saved key.
+/// `reachable: false` when nothing answers (or the key is refused, with `error` saying which).
 async fn ai_models(State(app): State<App>, Query(q): Query<UrlQ>) -> Json<Value> {
+    if q.kind.as_deref() == Some("api") {
+        let url = q.url.filter(|u| !u.trim().is_empty());
+        return Json(match app.ai.api_models(url.as_deref()).await {
+            Ok(models) => json!({"reachable": true, "models": models}),
+            Err(e) => json!({"reachable": false, "models": [], "error": e}),
+        });
+    }
     let url = q.url.filter(|u| !u.trim().is_empty()).unwrap_or_else(|| app.ai.public()["local_url"].as_str().unwrap_or(ai::DEFAULT_LOCAL_URL).to_string());
     let models = app.ai.local_models(url.trim_end_matches('/')).await;
     Json(json!({"url": url, "reachable": models.is_some(), "models": models.unwrap_or_default()}))

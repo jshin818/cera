@@ -74,11 +74,17 @@ with each citation as a pill in the text; click a pill to read that passage, or 
 answer for the list of all of them, and open a source to land on the exact lines. "Save" keeps the
 answer as a note in Inbox linked to its sources.
 
-Settings → AI answers picks the model: **Claude** (your Anthropic API key, or `ANTHROPIC_API_KEY`),
-a **local** OpenAI-compatible server such as Ollama (`localhost:11434`) or LM Studio
-(`localhost:1234`), or **off** for sources only. The key is kept in
-`~/Library/Application Support/Cera/ai.json`, never in the vault. Only the question and the
-matching passages are sent, and only to the model you chose.
+Settings → AI answers picks the model:
+
+- **Claude**: your Anthropic API key (or `ANTHROPIC_API_KEY`).
+- **API**: any OpenAI-compatible service with your key: Groq, OpenRouter, Together, OpenAI,
+  Mistral, DeepSeek, or another `https://…/v1` URL. Pick the model from the list it offers.
+- **Local**: an OpenAI-compatible server on this Mac, such as Ollama (`localhost:11434`) or
+  LM Studio (`localhost:1234`).
+- **Auto** uses the first of these that is set up; **Off** shows sources only.
+
+Keys are kept in `~/Library/Application Support/Cera/ai.json`, never in the vault. Only the
+question and the matching passages are sent, and only to the model you chose.
 
 ## AI agents (MCP)
 

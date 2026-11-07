@@ -149,3 +149,76 @@ async fn ask_streams_a_cited_answer_from_a_local_model() {
     let user = req["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap().to_string();
     assert!(user.contains("[1] Projects/Beta.md") && user.ends_with("Question: What did we decide about the beta?"), "{user}");
 }
+
+/// A stand-in for a hosted API such as Groq: like the local one, but under a path prefix and only
+/// for the right bearer key.
+async fn fake_hosted_model() -> String {
+    use axum::http::{HeaderMap, StatusCode as S};
+    use axum::routing::{get, post};
+    let authed = |h: &HeaderMap| h.get("authorization").and_then(|v| v.to_str().ok()) == Some("Bearer gsk-test");
+    let r = axum::Router::new()
+        .route(
+            "/openai/v1/models",
+            get(move |h: HeaderMap| async move {
+                if !authed(&h) {
+                    return (S::UNAUTHORIZED, axum::Json(json!({"error": {"message": "Invalid API Key"}})));
+                }
+                (S::OK, axum::Json(json!({"data": [{"id": "llama-3.3-70b-versatile"}, {"id": "gemma2-9b-it"}]})))
+            }),
+        )
+        .route(
+            "/openai/v1/chat/completions",
+            post(move |h: HeaderMap, axum::Json(body): axum::Json<Value>| async move {
+                if !authed(&h) {
+                    return (S::UNAUTHORIZED, [("content-type", "application/json")], json!({"error": {"message": "Invalid API Key"}}).to_string());
+                }
+                let t = format!("Hosted {} says ship [1].", body["model"].as_str().unwrap_or("?"));
+                let chunks = format!(
+                    "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+                    json!({"choices": [{"delta": {"content": t}, "finish_reason": null}]}),
+                    json!({"choices": [{"delta": {}, "finish_reason": "stop"}], "x_groq": {"usage": {}}})
+                );
+                (S::OK, [("content-type", "text/event-stream")], chunks)
+            }),
+        );
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/openai/v1", l.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(l, r).await.unwrap() });
+    url
+}
+
+#[tokio::test]
+async fn ask_streams_an_answer_from_a_hosted_api_with_its_key() {
+    let (_d, _c, app) = app();
+    let url = fake_hosted_model().await;
+    let (code, body) = send(&app, "PUT", "/api/ai", Some(json!({"provider": "api", "api_url": url, "api_key": "wrong"}))).await;
+    assert_eq!(code, StatusCode::OK, "{body}");
+    let v: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["has_api_key"], true);
+    assert!(!body.contains("wrong"), "the key never comes back: {body}");
+
+    // A refused key says so; without a model, Ask explains instead of guessing one.
+    let (_, body) = send(&app, "GET", "/api/ai/models?kind=api", None).await;
+    let v: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!((v["reachable"].clone(), v["error"].clone()), (json!(false), json!("The API rejected this key.")));
+    send(&app, "PUT", "/api/ai", Some(json!({"api_key": "gsk-test"}))).await;
+    let (_, body) = send(&app, "GET", "/api/ai/models?kind=api", None).await;
+    assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["models"], json!(["gemma2-9b-it", "llama-3.3-70b-versatile"]));
+    let (_, body) = send(&app, "POST", "/api/ask", Some(json!({"question": "What did we decide about the beta?"}))).await;
+    let ev = events(&body);
+    assert_eq!(ev.last().unwrap().1["note"], "Pick a model for the API in Settings → AI.", "{body}");
+
+    send(&app, "PUT", "/api/ai", Some(json!({"api_model": "llama-3.3-70b-versatile"}))).await;
+    let (_, body) = send(&app, "POST", "/api/ask", Some(json!({"question": "What did we decide about the beta?"}))).await;
+    let ev = events(&body);
+    let names: Vec<&str> = ev.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["sources", "model", "delta", "done"], "{body}");
+    assert_eq!(ev[1].1, json!({"provider": "api", "model": "llama-3.3-70b-versatile", "url": url}));
+    assert_eq!(ev[2].1["text"], "Hosted llama-3.3-70b-versatile says ship [1].");
+    assert_eq!(ev[3].1["answered"], true);
+
+    // Auto uses the hosted API when it has a key and a model and Claude has no key.
+    send(&app, "PUT", "/api/ai", Some(json!({"provider": "auto"}))).await;
+    let (_, body) = send(&app, "POST", "/api/ask", Some(json!({"question": "What did we decide about the beta?"}))).await;
+    assert_eq!(events(&body)[1].1["provider"], "api", "{body}");
+}

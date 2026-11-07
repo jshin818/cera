@@ -6,6 +6,9 @@ import { esc, ago, folderOf } from './util.js';
 
 const MODELS = [['claude-opus-5-5', 'Opus 5.5'], ['claude-sonnet-5-5', 'Sonnet 5.5'], ['claude-haiku-5-5', 'Haiku 5.5']];
 const modelName = id => MODELS.find(m => m[0] === id)?.[1] || id;
+// Hosted OpenAI-compatible APIs offered by name; any other https URL works too.
+const SERVICES = [['https://api.groq.com/openai/v1', 'Groq'], ['https://openrouter.ai/api/v1', 'OpenRouter'], ['https://api.together.xyz/v1', 'Together'], ['https://api.openai.com/v1', 'OpenAI'], ['https://api.mistral.ai/v1', 'Mistral'], ['https://api.deepseek.com/v1', 'DeepSeek']];
+const serviceName = url => SERVICES.find(s => s[0] === url)?.[1] || (/^https?:\/\/(?:api\.)?([^/:]+)/.exec(url || '')?.[1] ?? 'API');
 const X = '<svg class="ic" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>';
 const PREV = '<svg class="ic" viewBox="0 0 24 24"><path d="m15 6-6 6 6 6"/></svg>';
 const NEXT = '<svg class="ic" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>';
@@ -96,12 +99,15 @@ function drawModel(live) {
   if (!b) return;
   const a = aiState;
   let label;
-  if (live) label = live.provider === 'claude' ? `Claude ${modelName(live.model)}` : `Local · ${live.model}`;
+  const auto = a?.provider === 'auto';
+  const apiReady = a?.has_api_key && a.api_model;
+  if (live) label = live.provider === 'claude' ? `Claude ${modelName(live.model)}` : live.provider === 'api' ? `${serviceName(live.url)} · ${live.model}` : `Local · ${live.model}`;
   else if (!a || a.provider === 'off') label = 'Sources only';
-  else if (a.provider === 'claude' || (a.provider === 'auto' && a.has_key)) label = a.has_key ? `Claude ${modelName(a.claude_model)}` : 'Claude · add a key';
+  else if (a.provider === 'claude' || (auto && a.has_key)) label = a.has_key ? `Claude ${modelName(a.claude_model)}` : 'Claude · add a key';
+  else if (a.provider === 'api' || (auto && apiReady)) label = `${serviceName(a.api_url)} · ${!a.has_api_key ? 'add a key' : a.api_model || 'pick a model'}`;
   else if (a.provider === 'local') label = `Local · ${a.local_model || 'first model'}`;
   else label = 'Local model or sources only';
-  const ready = live || (a && ((a.has_key && a.provider !== 'off' && a.provider !== 'local') || a.provider === 'local'));
+  const ready = live || (a && (a.provider === 'local' || ((a.provider === 'claude' || auto) && a.has_key) || ((a.provider === 'api' || auto) && apiReady)));
   b.innerHTML = `<span class="dot${ready ? ' on' : ''}"></span>${esc(label)}`;
 }
 
@@ -315,36 +321,70 @@ async function saveTurn(t) {
 }
 
 /* ---------- Settings → AI ---------- */
+// Only the chosen provider's fields are shown; Auto shows all three, in the order it tries them.
+let customApi = false;
 export async function renderAiSettings(el, toast, check) {
   const a = (aiState = await api.ai().catch(() => null));
   if (!a) { el.innerHTML = `<p class="s-note">Couldn't load AI settings.</p>`; return }
   const seg = (key, value, options) => `<span class="seg" role="radiogroup">${options.map(([v, label]) => `<button role="radio" aria-checked="${v === value}" class="${v === value ? 'on' : ''}" data-ai="${key}" data-v="${v}">${label}</button>`).join('')}</span>`;
   const row = (label, hint, control) => `<div class="s-row"><div><b>${label}</b>${hint ? `<small>${hint}</small>` : ''}</div>${control}</div>`;
-  const keyHint = a.key_source === 'env' ? 'Using ANTHROPIC_API_KEY from the environment' : a.has_key ? 'Saved on this Mac, outside your vault' : 'Needed to answer with Claude';
+  const keyField = (id, label, has, removable, placeholder) => `<span class="s-field"><input id="${id}" type="password" autocomplete="off" spellcheck="false" placeholder="${has ? '••••••••' : placeholder}" aria-label="${label}">${removable ? `<button class="btn quiet" data-del="${id}">Remove</button>` : ''}<button class="btn quiet" data-put="${id}">Save</button></span>`;
+  const show = k => a.provider === 'auto' || a.provider === k;
+  const known = SERVICES.some(s => s[0] === a.api_url);
+  const custom = customApi || !known;
+  const keyHint = a.key_source === 'env' ? 'Using ANTHROPIC_API_KEY from the environment' : a.has_key ? 'Saved on this Mac, outside your vault' : 'From console.anthropic.com';
   el.innerHTML = `
-    ${row('Answer with', 'Auto uses Claude when a key is set, otherwise a local model if one is running', seg('provider', a.provider, [['auto', 'Auto'], ['claude', 'Claude'], ['local', 'Local'], ['off', 'Off']]))}
-    ${row('Claude API key', keyHint, `<span class="s-field"><input id="ai-key" type="password" autocomplete="off" spellcheck="false" placeholder="${a.has_key ? '••••••••' : 'sk-ant-…'}" aria-label="Claude API key">${a.key_source === 'saved' ? `<button class="btn quiet" id="ai-key-del">Remove</button>` : ''}<button class="btn quiet" id="ai-key-save">Save</button></span>`)}
-    ${row('Claude model', 'Opus is the most capable; Haiku is the fastest', seg('claude_model', a.claude_model, MODELS))}
-    ${row('Local server', 'Ollama: localhost:11434 · LM Studio: localhost:1234', `<span class="s-field"><input id="ai-url" value="${esc(a.local_url)}" spellcheck="false" aria-label="Local model server URL"><button class="btn quiet" id="ai-check">Check</button></span>`)}
-    <div id="ai-local"></div>
-    <p class="s-note">Your question and the matching passages are sent to the model you pick: to Anthropic for Claude, or to the server on this Mac for a local model. Fallback to another Claude model is on, so an overloaded model doesn't fail the answer. Nothing is sent when answers are off.</p>`;
+    ${row('Answer with', a.provider === 'auto' ? 'Uses the first one that is set up' : '', seg('provider', a.provider, [['auto', 'Auto'], ['claude', 'Claude'], ['api', 'API'], ['local', 'Local'], ['off', 'Off']]))}
+    ${show('claude') ? `<h4 class="s-sub">Claude</h4>
+      ${row('API key', keyHint, keyField('ai-key', 'Claude API key', a.has_key, a.key_source === 'saved', 'sk-ant-…'))}
+      ${row('Model', 'Opus is the most capable; Haiku is the fastest', seg('claude_model', a.claude_model, MODELS))}` : ''}
+    ${show('api') ? `<h4 class="s-sub">API</h4>
+      ${row('Service', 'Any OpenAI-compatible API', `<select id="ai-svc" aria-label="API service">${SERVICES.map(([u, n]) => `<option value="${u}"${!custom && u === a.api_url ? ' selected' : ''}>${n}</option>`).join('')}<option value=""${custom ? ' selected' : ''}>Other URL…</option></select>`)}
+      ${custom ? row('URL', 'Up to the version, like https://…/v1', `<span class="s-field"><input id="ai-api-url" value="${known ? '' : esc(a.api_url)}" placeholder="https://" spellcheck="false" aria-label="API URL"><button class="btn quiet" data-put="ai-api-url">Save</button></span>`) : ''}
+      ${row('API key', a.has_api_key ? 'Saved on this Mac, outside your vault' : `Your ${esc(serviceName(a.api_url))} key`, keyField('ai-api-key', 'API key', a.has_api_key, a.has_api_key, 'Paste key'))}
+      <div id="ai-api"></div>` : ''}
+    ${show('local') ? `<h4 class="s-sub">Local</h4>
+      ${row('Server', 'Ollama: localhost:11434 · LM Studio: localhost:1234', `<span class="s-field"><input id="ai-url" value="${esc(a.local_url)}" spellcheck="false" aria-label="Local model server URL"><button class="btn quiet" id="ai-check">Check</button></span>`)}
+      <div id="ai-local"></div>` : ''}
+    <p class="s-note">Your question and the matching passages are sent to the model you pick: to Anthropic for Claude, to the service you chose for an API, or to the server on this Mac for a local model. Nothing is sent when answers are off.</p>`;
   const save = (patch, recheck) => api.setAi(patch).then(v => { aiState = v; drawModel(); return renderAiSettings(el, toast, recheck) }).catch(e => toast(e.message || String(e)));
+  const models = (box, list, value, key, blank) => {
+    box.innerHTML = row('Model', `${list.length} available`, `<select data-model="${key}" aria-label="Model">${['', ...list].map(m => `<option value="${esc(m)}"${m === value ? ' selected' : ''}>${m ? esc(m) : blank}</option>`).join('')}</select>`);
+    box.querySelector('select').onchange = e => save({ [key]: e.target.value });
+  };
   const checkLocal = async () => {
     const box = el.querySelector('#ai-local');
+    if (!box) return;
     box.innerHTML = `<p class="s-note">Checking…</p>`;
     const r = await api.aiModels(el.querySelector('#ai-url').value.trim()).catch(() => null);
     if (!r || !r.reachable) { box.innerHTML = `<p class="s-note">Nothing answered there. Start Ollama or LM Studio, then check again.</p>`; return }
     if (!r.models.length) { box.innerHTML = `<p class="s-note">The server answered but has no models. Pull one first (for example <code>ollama pull llama3.2</code>).</p>`; return }
-    box.innerHTML = row('Local model', `${r.models.length} available`, `<select id="ai-model" aria-label="Local model">${['', ...r.models].map(m => `<option value="${esc(m)}"${m === a.local_model ? ' selected' : ''}>${m ? esc(m) : 'First listed'}</option>`).join('')}</select>`);
-    box.querySelector('#ai-model').onchange = e => save({ local_model: e.target.value });
+    models(box, r.models, a.local_model, 'local_model', 'First listed');
   };
+  const checkApi = async () => {
+    const box = el.querySelector('#ai-api');
+    if (!box || !a.has_api_key) return;
+    box.innerHTML = `<p class="s-note">Loading models…</p>`;
+    const r = await api.aiModels(undefined, 'api').catch(e => ({ error: e.message }));
+    if (!r.reachable) { box.innerHTML = `<p class="s-note">${esc(r.error || 'The API didn’t answer.')}</p>`; return }
+    models(box, r.models, a.api_model, 'api_model', 'Pick a model');
+  };
+  const fields = { 'ai-key': 'anthropic_api_key', 'ai-api-key': 'api_key', 'ai-api-url': 'api_url' };
   el.onclick = e => {
     const b = e.target.closest('[data-ai]');
     if (b) return save({ [b.dataset.ai]: b.dataset.v });
-    if (e.target.closest('#ai-key-save')) { const k = el.querySelector('#ai-key').value.trim(); if (k) save({ anthropic_api_key: k }).then(() => toast('Key saved')) }
-    if (e.target.closest('#ai-key-del')) save({ anthropic_api_key: '' }).then(() => toast('Key removed'));
+    const put = e.target.closest('[data-put]');
+    if (put) {
+      const v = el.querySelector('#' + put.dataset.put).value.trim();
+      if (v) save({ [fields[put.dataset.put]]: v }).then(() => { if (put.dataset.put !== 'ai-api-url') toast('Key saved'); else customApi = false });
+    }
+    const del = e.target.closest('[data-del]');
+    if (del) save({ [fields[del.dataset.del]]: '' }).then(() => toast('Key removed'));
     if (e.target.closest('#ai-check')) save({ local_url: el.querySelector('#ai-url').value.trim() }, true);
   };
-  el.querySelector('#ai-key').onkeydown = e => { if (e.key === 'Enter') el.querySelector('#ai-key-save').click() };
+  el.querySelectorAll('input[type=password], #ai-api-url').forEach(i => { i.onkeydown = e => { if (e.key === 'Enter') i.parentElement.querySelector('[data-put]').click() } });
+  const svc = el.querySelector('#ai-svc');
+  if (svc) svc.onchange = () => { customApi = !svc.value; if (svc.value) save({ api_url: svc.value }); else renderAiSettings(el, toast) };
   if (check || a.provider === 'local' || a.local_model) checkLocal();
+  checkApi();
 }

@@ -1,11 +1,12 @@
 //! Answers from the notes. Recall (vault-core) picks the passages; a model writes the answer and
-//! cites them as [n]. Two providers: Claude through the Messages API with the user's key, and a
-//! local OpenAI-compatible server (Ollama, LM Studio). With neither, the Ask view shows the
-//! sources alone.
+//! cites them as [n]. Three providers: Claude through the Messages API with the user's key; a
+//! hosted OpenAI-compatible API with the user's key (Groq, OpenRouter, Together, OpenAI, Mistral,
+//! DeepSeek, or any other URL); and a local OpenAI-compatible server (Ollama, LM Studio). With none,
+//! the Ask view shows the sources alone.
 //!
 //! Settings live in the app's config folder, never in the vault, so a synced or shared vault never
-//! carries the key; the key is written 0600 and never sent back to the page. `ANTHROPIC_API_KEY`
-//! works too. Local URLs must be on this machine.
+//! carries a key; keys are written 0600 and never sent back to the page. `ANTHROPIC_API_KEY` works
+//! too. Local URLs must be on this machine; hosted URLs must be https.
 
 use axum::response::sse::Event;
 use futures_util::StreamExt;
@@ -21,6 +22,8 @@ pub const CLAUDE_URL: &str = "https://api.anthropic.com/v1/messages";
 pub const ANTHROPIC_VERSION: &str = "2026-10-21";
 pub const DEFAULT_CLAUDE_MODEL: &str = "claude-opus-5-5";
 pub const DEFAULT_LOCAL_URL: &str = "http://localhost:11434";
+/// Groq: open models (Llama, Qwen, GPT-OSS), fast and with a free tier.
+pub const DEFAULT_API_URL: &str = "https://api.groq.com/openai/v1";
 /// Models that can fall back to another model server-side when they are overloaded.
 const FALLBACK_MODELS: &[&str] = &["claude-opus-5-5", "claude-sonnet-5-5"];
 const FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
@@ -28,14 +31,20 @@ const FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AiConfig {
-    /// auto (Claude if there is a key, else a local server if one answers) | claude | local | off
+    /// auto (Claude if it has a key, else the hosted API if it has a key and a model, else a local
+    /// server if one answers) | claude | api | local | off
     pub provider: String,
     pub claude_model: String,
+    /// Base URL of a hosted OpenAI-compatible API, up to the version (`…/v1`).
+    pub api_url: String,
+    pub api_model: String,
     pub local_url: String,
     /// Empty = the first model the local server lists.
     pub local_model: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub anthropic_api_key: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub api_key: String,
 }
 
 impl Default for AiConfig {
@@ -43,9 +52,12 @@ impl Default for AiConfig {
         Self {
             provider: "auto".into(),
             claude_model: DEFAULT_CLAUDE_MODEL.into(),
+            api_url: DEFAULT_API_URL.into(),
+            api_model: String::new(),
             local_url: DEFAULT_LOCAL_URL.into(),
             local_model: String::new(),
             anthropic_api_key: String::new(),
+            api_key: String::new(),
         }
     }
 }
@@ -79,6 +91,12 @@ pub fn is_loopback_url(u: &str) -> bool {
     matches!(host.as_str(), "localhost" | "127.0.0.1" | "[::1]")
 }
 
+/// A hosted API gets the key, so it must be https; plain http only on this machine.
+pub fn is_api_url(u: &str) -> bool {
+    let host_ok = |rest: &str| rest.split(['/', '?', '#']).next().is_some_and(|h| !h.is_empty() && !h.contains('@'));
+    u.strip_prefix("https://").is_some_and(host_ok) || is_loopback_url(u)
+}
+
 pub struct Ai {
     path: Option<PathBuf>,
     cfg: Mutex<AiConfig>,
@@ -88,6 +106,7 @@ pub struct Ai {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Provider {
     Claude { key: String, model: String },
+    Api { url: String, key: String, model: String },
     Local { url: String, model: String },
 }
 
@@ -95,6 +114,7 @@ impl Provider {
     fn label(&self) -> Value {
         match self {
             Provider::Claude { model, .. } => json!({"provider": "claude", "model": model}),
+            Provider::Api { url, model, .. } => json!({"provider": "api", "model": model, "url": url}),
             Provider::Local { url, model } => json!({"provider": "local", "model": model, "url": url}),
         }
     }
@@ -124,15 +144,17 @@ impl Ai {
         let c = self.cfg.lock().clone();
         let (_, source) = self.key();
         json!({"provider": c.provider, "claude_model": c.claude_model, "local_url": c.local_url, "local_model": c.local_model,
-               "has_key": source.is_some(), "key_source": source})
+               "has_key": source.is_some(), "key_source": source,
+               "api_url": c.api_url, "api_model": c.api_model, "has_api_key": !c.api_key.is_empty()})
     }
 
-    /// Apply the fields present in `patch` and save. `anthropic_api_key: ""` forgets the saved key.
+    /// Apply the fields present in `patch` and save. An empty `anthropic_api_key` or `api_key`
+    /// forgets that key.
     pub fn update(&self, patch: &Value) -> Result<Value, String> {
         let mut c = self.cfg.lock().clone();
         let s = |k: &str| patch.get(k).and_then(Value::as_str).map(|v| v.trim().to_string());
         if let Some(p) = s("provider") {
-            if !["auto", "claude", "local", "off"].contains(&p.as_str()) {
+            if !["auto", "claude", "api", "local", "off"].contains(&p.as_str()) {
                 return Err(format!("unknown provider \"{p}\""));
             }
             c.provider = p;
@@ -146,6 +168,22 @@ impl Ai {
                 return Err("the local model URL must be on this machine (localhost, 127.0.0.1 or [::1])".into());
             }
             c.local_url = u;
+        }
+        if let Some(u) = s("api_url") {
+            let u = if u.is_empty() { DEFAULT_API_URL.to_string() } else { u.trim_end_matches('/').to_string() };
+            if !is_api_url(&u) {
+                return Err("the API URL must start with https:// (or be on this machine)".into());
+            }
+            if u != c.api_url {
+                c.api_model.clear();
+            }
+            c.api_url = u;
+        }
+        if let Some(m) = s("api_model") {
+            c.api_model = m;
+        }
+        if let Some(k) = s("api_key") {
+            c.api_key = k;
         }
         if let Some(m) = s("local_model") {
             c.local_model = m;
@@ -170,11 +208,42 @@ impl Ai {
         Some(v["data"].as_array()?.iter().filter_map(|m| m["id"].as_str().map(String::from)).collect())
     }
 
+    /// Model ids a hosted API offers to the saved key (`GET {api_url}/models`).
+    pub async fn api_models(&self, url: Option<&str>) -> Result<Vec<String>, String> {
+        let c = self.cfg.lock().clone();
+        let url = url.map(|u| u.trim_end_matches('/').to_string()).unwrap_or(c.api_url);
+        if !is_api_url(&url) {
+            return Err("The API URL must start with https://.".into());
+        }
+        if c.api_key.is_empty() {
+            return Err("Add the API key first.".into());
+        }
+        let r = self
+            .http
+            .get(format!("{url}/models"))
+            .bearer_auth(&c.api_key)
+            .timeout(Duration::from_secs(8))
+            .send()
+            .await
+            .map_err(|_| format!("Nothing answered at {url}."))?;
+        match r.status().as_u16() {
+            401 | 403 => return Err("The API rejected this key.".into()),
+            c if c >= 400 => return Err(format!("The API answered HTTP {c}.")),
+            _ => {}
+        }
+        let v: Value = r.json().await.map_err(|_| "The API's model list wasn't JSON.".to_string())?;
+        let mut ids: Vec<String> = v["data"].as_array().into_iter().flatten().filter_map(|m| m["id"].as_str().map(String::from)).collect();
+        ids.sort();
+        Ok(ids)
+    }
+
     /// The provider to answer with now, or why there is none.
     pub async fn pick(&self) -> Result<Provider, String> {
         let c = self.cfg.lock().clone();
         let (key, _) = self.key();
         let claude = || Provider::Claude { key: key.clone(), model: c.claude_model.clone() };
+        let api = || Provider::Api { url: c.api_url.clone(), key: c.api_key.clone(), model: c.api_model.clone() };
+        let api_ready = !c.api_key.is_empty() && !c.api_model.is_empty();
         let local = async {
             let models = self.local_models(&c.local_url).await;
             match models {
@@ -189,11 +258,15 @@ impl Ai {
             "off" => Err("Answers are turned off; showing sources only.".into()),
             "claude" if key.is_empty() => Err("Add an Anthropic API key in Settings → AI to answer with Claude.".into()),
             "claude" => Ok(claude()),
+            "api" if c.api_key.is_empty() => Err("Add an API key in Settings → AI to answer with it.".into()),
+            "api" if c.api_model.is_empty() => Err("Pick a model for the API in Settings → AI.".into()),
+            "api" => Ok(api()),
             "local" => local.await,
             _ if !key.is_empty() => Ok(claude()),
+            _ if api_ready => Ok(api()),
             _ => local
                 .await
-                .map_err(|_| "No answer model is set up, so here are the sources. Add a Claude key or start Ollama / LM Studio in Settings → AI.".into()),
+                .map_err(|_| "No answer model is set up, so here are the sources. Add an API key or start Ollama / LM Studio in Settings → AI.".into()),
         }
     }
 }
@@ -281,7 +354,7 @@ pub fn openai_event(data: &str) -> Option<Delta> {
     }
     let v: Value = serde_json::from_str(data).ok()?;
     if let Some(e) = v.get("error") {
-        return Some(Delta::Error(e["message"].as_str().or(e.as_str()).unwrap_or("the local model returned an error").to_string()));
+        return Some(Delta::Error(e["message"].as_str().or(e.as_str()).unwrap_or("the model returned an error").to_string()));
     }
     let c = &v["choices"][0];
     if let Some(t) = c["delta"]["content"].as_str().filter(|t| !t.is_empty()) {
@@ -384,12 +457,10 @@ pub async fn run_ask(engine: Engine, ai: std::sync::Arc<Ai>, req: AskRequest, tx
             }
             (r.json(&body).send().await, claude_event)
         }
-        Provider::Local { url, model } => {
-            let mut all = vec![json!({"role": "system", "content": system})];
-            all.extend(msgs);
-            let body = json!({"model": model, "stream": true, "messages": all});
-            (ai.http.post(format!("{url}/v1/chat/completions")).json(&body).send().await, openai_event)
+        Provider::Api { url, key, model } => {
+            (ai.http.post(format!("{url}/chat/completions")).bearer_auth(key).json(&chat_body(model, system, msgs)).send().await, openai_event)
         }
+        Provider::Local { url, model } => (ai.http.post(format!("{url}/v1/chat/completions")).json(&chat_body(model, system, msgs)).send().await, openai_event),
     };
     let resp = match resp {
         Ok(r) if r.status().is_success() => r,
@@ -432,11 +503,21 @@ pub async fn run_ask(engine: Engine, ai: std::sync::Arc<Ai>, req: AskRequest, tx
     let _ = tx.send(ev("done", json!({"answered": true, "stop_reason": stop, "note": note}))).await;
 }
 
+/// An OpenAI-style chat-completions request: the system prompt goes first as a message.
+fn chat_body(model: &str, system: String, msgs: Vec<Value>) -> Value {
+    let mut all = vec![json!({"role": "system", "content": system})];
+    all.extend(msgs);
+    json!({"model": model, "stream": true, "messages": all})
+}
+
 fn friendly(p: &Provider, code: u16, msg: &str) -> String {
     match (p, code) {
         (Provider::Claude { .. }, 401) => "Claude rejected the API key. Check it in Settings → AI.".into(),
         (Provider::Claude { .. }, 429) => "Claude is rate-limiting this key; try again in a moment.".into(),
         (Provider::Claude { .. }, 529) => "Claude is overloaded right now; try again in a moment.".into(),
+        (Provider::Api { .. }, 401 | 403) => "The API rejected the key. Check it in Settings → AI.".into(),
+        (Provider::Api { .. }, 429) => "The API is rate-limiting this key; try again in a moment.".into(),
+        (Provider::Api { model, .. }, 404) => format!("The API doesn't offer the model \"{model}\". Pick another in Settings → AI."),
         (Provider::Local { model, .. }, 404) => format!("The local server doesn't have the model \"{model}\". Pick another in Settings → AI."),
         _ => msg.to_string(),
     }
@@ -484,6 +565,15 @@ mod tests {
     }
 
     #[test]
+    fn hosted_apis_need_https() {
+        assert!(is_api_url("https://api.groq.com/openai/v1"));
+        assert!(is_api_url("http://127.0.0.1:8080/v1"));
+        assert!(!is_api_url("http://api.groq.com/openai/v1"));
+        assert!(!is_api_url("https://"));
+        assert!(!is_api_url("https://user@evil.com/v1"));
+    }
+
+    #[test]
     fn follow_ups_borrow_the_previous_question() {
         let h = vec![
             Turn { role: "user".into(), content: "What did we decide about Beta?".into() },
@@ -505,6 +595,16 @@ mod tests {
         assert!(v.get("anthropic_api_key").is_none());
         assert!(ai.update(&json!({"local_url": "http://192.168.1.5:11434"})).is_err());
         assert!(ai.update(&json!({"provider": "gpt"})).is_err());
+        let v = ai.update(&json!({"provider": "api", "api_key": "gsk-test", "api_model": "llama-3.3-70b-versatile"})).unwrap();
+        assert_eq!(v["has_api_key"], true);
+        assert!(v.get("api_key").is_none());
+        assert_eq!(v["api_url"], DEFAULT_API_URL);
+        assert!(ai.update(&json!({"api_url": "http://api.groq.com/openai/v1"})).is_err());
+        // A new URL is a new provider, so its model has to be picked again.
+        let v = ai.update(&json!({"api_url": "https://openrouter.ai/api/v1/"})).unwrap();
+        assert_eq!(v["api_url"], "https://openrouter.ai/api/v1");
+        assert_eq!(v["api_model"], "");
+        ai.update(&json!({"provider": "claude"})).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

@@ -61,7 +61,14 @@ fn read_tools() {
     let m = Mcp::new(e, false);
     let names: Vec<String> =
         rpc(&m, "tools/list", json!({}))["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
-    assert_eq!(names, ["search", "read_note", "list_folder", "recent", "backlinks", "related", "tags"]);
+    assert_eq!(names, ["context", "search", "read_note", "list_folder", "recent", "backlinks", "related", "tags"]);
+
+    // Recall: numbered passages with sources, ready to cite.
+    let c = call(&m, "context", json!({"question": "what did we decide to ship?"}));
+    assert_eq!(c["isError"], false, "{c}");
+    assert_eq!(c["structuredContent"]["passages"][0]["path"], "Projects/Beta.md", "{c}");
+    assert!(c["content"][0]["text"].as_str().unwrap().starts_with("[1] Projects/Beta.md"), "{c}");
+    assert_eq!(call(&m, "context", json!({"question": " "}))["isError"], true);
 
     let s = call(&m, "search", json!({"query": "gamma plan"}));
     assert_eq!(s["isError"], false);

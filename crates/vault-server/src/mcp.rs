@@ -22,8 +22,9 @@ pub const DEFAULT_FOLDER: &str = "Inbox";
 const READ_LIMIT: usize = 20_000;
 
 const INSTRUCTIONS: &str = "Cēra is the user's local Markdown notes vault. Notes are plain .md files; paths are relative to \
-the vault. Use `search` first (it matches meaning and words), then `read_note` for the notes you need; pass `heading` to read \
-one section. `related` and `backlinks` follow the user's own links. Notes accept [[wikilinks]] and #tags. When writing, keep \
+the vault. To answer a question from the notes, call `context`: it returns the passages that answer it, numbered, with \
+path, section and line, so you can cite them as [n]. Use `search` to find notes (it matches meaning and words), then `read_note` \
+for the notes you need; pass `heading` to read one section. `related` and `backlinks` follow the user's own links. Notes accept [[wikilinks]] and #tags. When writing, keep \
 the user's voice, prefer appending to existing notes over creating near-duplicates, and put new notes in Inbox unless asked.";
 
 #[derive(Clone)]
@@ -136,6 +137,13 @@ impl Mcp {
         let read = json!({"readOnlyHint": true, "openWorldHint": false});
         let note = json!({"type": "string", "description": "Note path relative to the vault (e.g. \"Projects/Plan.md\"), or its title or alias"});
         let mut t = vec![
+            json!({"name": "context", "title": "Recall from notes",
+                "description": "The passages of the user's notes that best answer a question, numbered [1], [2]… with path, section, line and why each was picked, plus how the notes link to each other and what they leave out (gaps). Cite passages by number. Accepts the search syntax (tag:name, path:folder, -word) to scope it.",
+                "inputSchema": {"type": "object", "properties": {
+                    "question": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 8}},
+                    "required": ["question"]},
+                "annotations": read}),
             json!({"name": "search", "title": "Search notes",
                 "description": "Find notes by meaning and keywords. Returns paths, titles, the best-matching section and an excerpt. Supports \"exact phrase\", tag:name and -word.",
                 "inputSchema": {"type": "object", "properties": {
@@ -195,6 +203,23 @@ impl Mcp {
         let n = |k: &str, d: usize, max: usize| a.get(k).and_then(Value::as_u64).map(|v| (v as usize).clamp(1, max)).unwrap_or(d);
         let structured = |v: Value| Ok((v.to_string(), Some(v)));
         match name {
+            "context" => {
+                let q = s("question");
+                if q.is_empty() {
+                    return Err("question is empty".into());
+                }
+                let r = e.recall(&q, &vault_core::RecallOptions { limit: n("limit", 8, 20), ..Default::default() }).map_err(msg)?;
+                let text = r.context_text();
+                let passages: Vec<Value> = r
+                    .passages
+                    .iter()
+                    .map(|p| json!({"n": p.n, "path": p.note.path, "title": p.note.title, "section": p.section, "line": p.line, "text": p.text, "why": p.why, "modified_ms": p.mtime_ms}))
+                    .collect();
+                Ok((
+                    if text.is_empty() { "Nothing in the notes matches this.".into() } else { text },
+                    Some(json!({"passages": passages, "connections": r.connections, "gaps": r.gaps})),
+                ))
+            }
             "search" => {
                 let q = s("query");
                 if q.is_empty() {

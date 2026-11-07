@@ -636,6 +636,13 @@ export function createEditor(parent, opts) {
       view.dispatch({ selection: { anchor: Math.min(pos, view.state.doc.length) }, scrollIntoView: true });
       view.focus();
     },
+    // Select [from, to) and bring it to the middle of the screen (a cited passage).
+    revealRange(from, to) {
+      const len = view.state.doc.length;
+      const a = Math.min(from, len), b = Math.min(to, len);
+      view.dispatch({ selection: { anchor: a, head: b }, effects: EditorView.scrollIntoView(a, { y: 'center' }) });
+      view.focus();
+    },
     editProperties() {
       if (!frontmatterRange(view.state.doc)) return false;
       view.focus();

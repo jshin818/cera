@@ -65,6 +65,27 @@ vault bench ~/vault-100k            # Section 8 budgets; --baseline old.json gat
 
 Synthetic vaults for benchmarking: `cargo run --release -p gen-vault -- ~/vault-100k --notes 100000`.
 
+## Ask your notes
+
+⌘J (or a question ending in "?" on Home) opens **Ask**. Cēra finds the passages that answer it,
+numbered, with the note, section, line, edit date and why each was picked, how those notes link to
+each other, and what the notes leave out. An answer model, if you set one up, writes a short answer
+with each citation as a pill in the text; click a pill to read that passage, or "sources" under the
+answer for the list of all of them, and open a source to land on the exact lines. "Save" keeps the
+answer as a note in Inbox linked to its sources.
+
+Settings → AI answers picks the model:
+
+- **Claude**: your Anthropic API key (or `ANTHROPIC_API_KEY`).
+- **API**: any OpenAI-compatible service with your key: Groq, OpenRouter, Together, OpenAI,
+  Mistral, DeepSeek, or another `https://…/v1` URL. Pick the model from the list it offers.
+- **Local**: an OpenAI-compatible server on this Mac, such as Ollama (`localhost:11434`) or
+  LM Studio (`localhost:1234`).
+- **Auto** uses the first of these that is set up; **Off** shows sources only.
+
+Keys are kept in `~/Library/Application Support/Cera/ai.json`, never in the vault. Only the
+question and the matching passages are sent, and only to the model you chose.
+
 ## AI agents (MCP)
 
 Cēra speaks the Model Context Protocol, so agents such as Claude Code, Claude Desktop, Cursor or
@@ -77,9 +98,9 @@ Codex can search and read your notes. Add this to the agent's MCP settings:
 While the Cēra app is open, `vault mcp` goes through it; otherwise pass the vault folder
 (`"args": ["mcp", "/Users/you/Notes"]`). Add `"--write"` to let the agent create notes (in
 `Inbox/`) and append to notes. It never deletes or renames, and every write is listed in
-`.vault/agent-log.jsonl`. Tools: `search`, `read_note`, `list_folder`, `recent`, `backlinks`,
-`related`, `tags`, plus `create_note` and `append_to_note` with `--write`. Notes are also
-readable as `cera://note/<path>` resources.
+`.vault/agent-log.jsonl`. Tools: `context` (the cited passages that answer a question), `search`,
+`read_note`, `list_folder`, `recent`, `backlinks`, `related`, `tags`, plus `create_note` and
+`append_to_note` with `--write`. Notes are also readable as `cera://note/<path>` resources.
 
 ## Keyboard
 
@@ -89,6 +110,7 @@ readable as `cera://note/<path>` resources.
 | ⌘P | Commands |
 | ⌘⇧F | Search view (meaning + words, or exact words) |
 | ⌘N | New note |
+| ⌘J | Ask your notes |
 | ⌘G | Graph for the current note |
 | ⌘-click | Open a link or result in a new tab; ⌘W closes the tab |
 | ⌘B ⌘I ⌘E ⌘⇧H | Bold, italic, code, highlight |

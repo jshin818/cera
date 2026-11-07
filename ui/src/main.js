@@ -3,7 +3,8 @@
 import { api } from './api.js';
 import { createEditor } from './editor.js';
 import { mountGraph } from './graph.js';
-import { $, esc, tagColor, debounce, SVG, ICON, logo, ago, titleOf, folderOf, fmt } from './util.js';
+import { mountAsk, renderAiSettings } from './ask.js';
+import { $, esc, tagColor, debounce, SVG, ICON, logo, ago, titleOf, folderOf, fmt, byteToIndex } from './util.js';
 
 const app = $('app');
 const store = {
@@ -433,6 +434,7 @@ function inlineFolderName(initial, done, replacing) {
 /* ---------- explore nav ---------- */
 function renderExNav() {
   const items = [
+    ['ask', ICON.ask, 'Ask', ''],
     ['search', ICON.search, 'Search', ''],
     ['tags', ICON.tag, 'Tags', ''],
     ['topics', ICON.topics, 'Topics', status.clusters ? fmt(status.clusters) : ''],
@@ -486,16 +488,23 @@ async function renderHome() {
       const [sw, se] = await Promise.all([api.switch(q, 5), api.search(q, 'hybrid', 6).catch(() => ({ results: [] }))]);
       const seen = new Set(sw.map(s => s.path));
       homeRows = [
+        { ask: true, title: 'Ask your notes', sub: firstLine(q) },
         ...sw.map(s => ({ path: s.path, title: s.title, sub: s.alias ? `alias: ${s.alias}` : folderOf(s.path) })),
         ...se.results.filter(r => !seen.has(r.path)).map(r => ({ path: r.path, title: r.title, snippet: r.snippet, sub: r.section || folderOf(r.path) })),
       ];
-      $('matches').innerHTML = homeRows.map((r, i) => hitHtml(r, i)).join('') + `<p class="hint">↵ saves “${esc(firstLine(q))}” as a new note · ↑↓ to pick a match</p>`;
+      // A question goes to Ask by default; anything else becomes a new note.
+      const question = /\?\s*$/.test(q);
+      $('matches').innerHTML = homeRows.map((r, i) => hitHtml(r, i)).join('') + `<p class="hint">${question
+        ? `↵ asks your notes · ↓ to pick a note instead`
+        : `↵ saves “${esc(firstLine(q))}” as a new note · ⌘↵ asks your notes · ↑↓ to pick a match`}</p>`;
     }
-    homeSel = -1;
+    homeSel = q && /\?\s*$/.test(q) ? 0 : -1;
+    document.querySelectorAll('#matches .hit').forEach((b, i) => b.classList.toggle('sel', i === homeSel));
   } catch { /* still indexing */ }
 }
 const firstLine = s => s.split('\n')[0].slice(0, 80);
 function hitHtml(r, i) {
+  if (r.ask) return `<button class="hit ask-hit" data-i="${i}" data-ask="1">${SVG(ICON.ask)}<b>${esc(r.title)}<span class="where">${esc(r.sub)}</span></b></button>`;
   return `<button class="hit" data-i="${i}" data-path="${esc(r.path)}"><b>${esc(r.title)}<span class="where">${esc(r.sub || '')}</span></b>${r.snippet ? `<small>${r.snippet}</small>` : ''}</button>`;
 }
 const homeSearch = debounce(renderHome, 90);
@@ -507,12 +516,25 @@ $('capture').addEventListener('keydown', e => {
     document.querySelectorAll('#matches .hit').forEach((b, i) => b.classList.toggle('sel', i === homeSel));
   } else if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    if (homeSel >= 0 && homeRows[homeSel]) openNote(homeRows[homeSel].path, { newTab: e.metaKey || e.ctrlKey });
+    const row = homeRows[homeSel];
+    if ((e.metaKey || e.ctrlKey) && (!row || row.ask)) askHome();
+    else if (row?.ask) askHome();
+    else if (homeSel >= 0 && row) openNote(row.path, { newTab: e.metaKey || e.ctrlKey });
     else capture();
   }
 });
+function askHome() {
+  const q = $('capture').value.trim();
+  if (!q) return;
+  $('capture').value = '';
+  explore('ask', q);
+}
 $('send').onclick = capture;
-$('matches').addEventListener('click', e => { const h = e.target.closest('.hit[data-path]'); if (h) openNote(h.dataset.path, { newTab: e.metaKey || e.ctrlKey }) });
+$('matches').addEventListener('click', e => {
+  if (e.target.closest('.hit[data-ask]')) return askHome();
+  const h = e.target.closest('.hit[data-path]');
+  if (h) openNote(h.dataset.path, { newTab: e.metaKey || e.ctrlKey });
+});
 
 async function capture() {
   const text = $('capture').value.trim();
@@ -665,6 +687,7 @@ async function openNote(path, opts = {}) {
   markActiveInSidebar();
   if (!opts.reload) $('scroll').scrollTop = 0;
   if (opts.heading) jumpToHeading(n.content, opts.heading);
+  else if (opts.range) editor.revealRange(byteToIndex(n.content, opts.range[0]), byteToIndex(n.content, opts.range[1]));
   else if (opts.focusEnd) editor.focus(true);
   else if (opts.pos != null) editor.reveal(opts.pos);
   loadBelow(n.path);
@@ -955,6 +978,7 @@ const COMMANDS = [
   ['New note', '⌘N', () => newNote()],
   ['New folder', '', () => { setSideTab('notes'); $('f-add').click() }],
   ['Go home', '', goHome],
+  ['Ask your notes', '⌘J', () => explore('ask')],
   ['Search everything', '⌘⇧F', () => explore('search')],
   ['Graph of this note', '⌘G', () => explore('graph', cur?.path)],
   ['Graph of all notes', '', () => explore('graph')],
@@ -1061,9 +1085,12 @@ async function explore(kind, arg) {
   graphHandle = null;
   const ex = $('explore');
   ex.classList.toggle('wide', kind === 'graph');
+  ex.classList.toggle('ask-view', kind === 'ask');
   ex.innerHTML = '';
+  ex.onclick = null;
   markActiveInSidebar();
   try {
+    if (kind === 'ask') return mountAsk(ex, askDeps, arg);
     if (kind === 'search') return exploreSearch(ex, arg);
     if (kind === 'tags') return exploreTags(ex, arg);
     if (kind === 'topics') return exploreTopics(ex);
@@ -1071,6 +1098,15 @@ async function explore(kind, arg) {
     if (kind === 'data') return exploreData(ex);
   } catch (e) { fail(e) }
 }
+
+const askDeps = {
+  openNote,
+  // Open a cited passage selected in its note, with a way back to the answer.
+  openSource: p => openNote(p.path, { range: [p.start, p.end] }).then(() => toast(`Source ${p.n}: ${p.title}`, 'Back to answer', () => explore('ask'), 8000)),
+  openSettings,
+  toast,
+  refreshSidebar,
+};
 
 function exploreSearch(ex, q0 = '') {
   let mode = store.get('cera.searchMode', 'hybrid');
@@ -1219,7 +1255,7 @@ const toggle = (key, on, label) => `<button class="switch${on ? ' on' : ''}" rol
 const srow = (label, hint, control) => `<div class="s-row"><div><b>${label}</b>${hint ? `<small>${hint}</small>` : ''}</div>${control}</div>`;
 function renderSettings() {
   const st = status || {};
-  const keys = [['⌘K', 'Find a note'], ['⌘N', 'New note'], ['⌘P', 'Commands'], ['⌘G', 'Graph of this note'], ['⌘\\', 'Toggle sidebar'], ['⌘,', 'Settings']];
+  const keys = [['⌘K', 'Find a note'], ['⌘N', 'New note'], ['⌘P', 'Commands'], ['⌘J', 'Ask your notes'], ['⌘G', 'Graph of this note'], ['⌘\\', 'Toggle sidebar'], ['⌘,', 'Settings']];
   $('settings-body').innerHTML = `
     <section><h3>Appearance</h3>
       ${srow('Theme', '', seg('theme', theme, [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']]))}
@@ -1229,6 +1265,7 @@ function renderSettings() {
       ${srow('Line width', '', seg('width', settings.width, [['narrow', 'Narrow'], ['default', 'Default'], ['wide', 'Wide']]))}
       ${srow('Spell check', 'Underline misspelled words while you write', toggle('spellcheck', settings.spellcheck, 'Spell check'))}
     </section>
+    <section id="s-ai"><h3>AI answers</h3><div id="s-ai-body"><p class="s-note">Loading…</p></div></section>
     <section><h3>Sidebar</h3>
       ${srow('Note counts', 'Show how many notes each folder holds', toggle('counts', settings.counts, 'Note counts'))}
     </section>
@@ -1239,14 +1276,16 @@ function renderSettings() {
     <section><h3>Keyboard</h3>
       <div class="s-keys">${keys.map(([k, l]) => `<span>${l}</span><span class="kbd">${esc(k)}</span>`).join('')}</div>
     </section>`;
+  renderAiSettings($('s-ai-body'), toast);
 }
-function openSettings() {
+function openSettings(section) {
   renderSettings();
   $('settings-veil').hidden = false;
   $('settings-close').focus();
+  if (section === 'ai') $('s-ai').scrollIntoView({ block: 'start' });
 }
 function closeSettings() { $('settings-veil').hidden = true; $('settings-btn').focus() }
-$('settings-btn').onclick = openSettings;
+$('settings-btn').onclick = () => openSettings();
 $('settings-close').onclick = closeSettings;
 $('settings-veil').addEventListener('mousedown', e => { if (e.target === $('settings-veil')) closeSettings() });
 $('settings-body').addEventListener('click', e => {
@@ -1337,6 +1376,7 @@ addEventListener('keydown', e => {
   else if (mod && k === 'n') { e.preventDefault(); newNote() }
   else if (e.altKey && e.code === 'KeyN') { e.preventDefault(); newNote() }
   else if (mod && k === 'g') { e.preventDefault(); explore('graph', cur?.path) }
+  else if (mod && k === 'j') { e.preventDefault(); explore('ask') }
   else if (mod && k === 'w' && view === 'page' && ws.tabs.length) { e.preventDefault(); closeTab(ws.active) }
   else if (mod && k === 's') { e.preventDefault(); save() }
   else if (mod && e.key === ',') { e.preventDefault(); $('settings-veil').hidden ? openSettings() : closeSettings() }

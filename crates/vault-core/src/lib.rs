@@ -12,10 +12,12 @@ pub mod intern;
 mod ops;
 mod persist;
 mod query;
+mod recall;
 mod state;
 
 pub use ops::{NoteView, SaveOutcome, first_frame, safe_name};
 pub use query::*;
+pub use recall::{Connection, Gap, Passage, Recall, RecallOptions, ymd};
 pub use state::{Entry, OutLink, Snapshot};
 pub use vault_parse::Subpath;
 

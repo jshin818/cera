@@ -5,8 +5,10 @@
 //! When a token is set, `/api/*` and `/file/*` require it (cookie set by `/?t=<token>`, or the
 //! `x-vault-token` header), so other local processes can't read the vault through the port.
 //! `/mcp` is the Model Context Protocol endpoint for AI agents (see [`mcp`]); it also accepts
-//! `Authorization: Bearer <token>`.
+//! `Authorization: Bearer <token>`. `/api/ask` streams an answer from the notes with its sources
+//! (see [`ai`]).
 
+pub mod ai;
 pub mod mcp;
 
 use axum::body::Body;
@@ -69,6 +71,7 @@ struct App {
     /// Flips to true when the server is stopping, so open event streams end and the graceful
     /// shutdown doesn't wait on them forever.
     closing: Option<tokio::sync::watch::Receiver<bool>>,
+    ai: Arc<ai::Ai>,
 }
 
 pub fn random_token() -> String {
@@ -100,7 +103,8 @@ pub async fn serve(o: ServeOptions) -> anyhow::Result<()> {
         cb(addr, url.clone());
     }
     let (closing_tx, closing) = tokio::sync::watch::channel(false);
-    let app = build_router(engine.clone(), o.token, o.host, Some(closing));
+    let ai = Arc::new(ai::Ai::load(ai::default_config_path()));
+    let app = build_router(engine.clone(), o.token, o.host, Some(closing), ai);
     let stop = o.shutdown;
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
@@ -132,11 +136,22 @@ pub fn router(engine: Engine, token: Option<String>) -> Router {
 }
 
 pub fn router_with_host(engine: Engine, token: Option<String>, host: Option<Arc<dyn VaultHost>>) -> Router {
-    build_router(engine, token, host, None)
+    build_router(engine, token, host, None, Arc::new(ai::Ai::load(ai::default_config_path())))
 }
 
-fn build_router(engine: Engine, token: Option<String>, host: Option<Arc<dyn VaultHost>>, closing: Option<tokio::sync::watch::Receiver<bool>>) -> Router {
-    let state = App { engine, token: token.map(Arc::from), host, closing };
+/// A router whose AI settings come from (and are saved to) `ai_config`; `None` keeps them in memory.
+pub fn router_with_ai(engine: Engine, token: Option<String>, ai_config: Option<PathBuf>) -> Router {
+    build_router(engine, token, None, None, Arc::new(ai::Ai::load(ai_config)))
+}
+
+fn build_router(
+    engine: Engine,
+    token: Option<String>,
+    host: Option<Arc<dyn VaultHost>>,
+    closing: Option<tokio::sync::watch::Receiver<bool>>,
+    ai: Arc<ai::Ai>,
+) -> Router {
+    let state = App { engine, token: token.map(Arc::from), host, closing, ai };
     let api = Router::new()
         .route("/api/boot", get(boot))
         .route("/api/vaults", get(vaults_get))
@@ -153,6 +168,10 @@ fn build_router(engine: Engine, token: Option<String>, host: Option<Arc<dyn Vaul
         .route("/api/folder/delete", post(folder_delete))
         .route("/api/switch", get(switch))
         .route("/api/search", get(search))
+        .route("/api/recall", get(recall))
+        .route("/api/ask", post(ask))
+        .route("/api/ai", get(ai_get).put(ai_put))
+        .route("/api/ai/models", get(ai_models))
         .route("/api/resolve", get(resolve))
         .route("/api/backlinks", get(backlinks))
         .route("/api/mentions", get(mentions))
@@ -538,6 +557,55 @@ async fn rescan(State(app): State<App>) -> ApiResult {
         Ok(json!({"ok": true}))
     })
     .await
+}
+
+async fn recall(State(app): State<App>, Query(q): Query<LimitQ>) -> ApiResult {
+    let query = q.q.unwrap_or_default();
+    let opts = vault_core::RecallOptions { limit: q.limit.unwrap_or(8).clamp(1, 20), ..Default::default() };
+    blocking(&app, move |e| e.recall(&query, &opts)).await
+}
+
+/// Server-sent events: `sources` (the recall), `model`, `delta`…, then `done` or `error`.
+async fn ask(State(app): State<App>, Json(req): Json<ai::AskRequest>) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+    use futures_util::StreamExt;
+    let (tx, rx) = tokio::sync::mpsc::channel(64);
+    tokio::spawn(ai::run_ask(app.engine.clone(), app.ai.clone(), req, tx));
+    Sse::new(tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok)).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
+}
+
+async fn ai_get(State(app): State<App>) -> Json<Value> {
+    Json(app.ai.public())
+}
+
+async fn ai_put(State(app): State<App>, Json(patch): Json<Value>) -> ApiResult {
+    let ai = app.ai.clone();
+    match tokio::task::spawn_blocking(move || ai.update(&patch)).await {
+        Ok(Ok(v)) => Ok(Json(v)),
+        Ok(Err(m)) => Err(ApiError(CoreError::Invalid(m))),
+        Err(e) => Err(ApiError(CoreError::Other(e.to_string()))),
+    }
+}
+
+#[derive(Deserialize)]
+struct UrlQ {
+    url: Option<String>,
+    /// `api` for the hosted API (with the saved key); otherwise the local server.
+    kind: Option<String>,
+}
+
+/// Models a local server offers, or with `kind=api` the hosted API offers the saved key.
+/// `reachable: false` when nothing answers (or the key is refused, with `error` saying which).
+async fn ai_models(State(app): State<App>, Query(q): Query<UrlQ>) -> Json<Value> {
+    if q.kind.as_deref() == Some("api") {
+        let url = q.url.filter(|u| !u.trim().is_empty());
+        return Json(match app.ai.api_models(url.as_deref()).await {
+            Ok(models) => json!({"reachable": true, "models": models}),
+            Err(e) => json!({"reachable": false, "models": [], "error": e}),
+        });
+    }
+    let url = q.url.filter(|u| !u.trim().is_empty()).unwrap_or_else(|| app.ai.public()["local_url"].as_str().unwrap_or(ai::DEFAULT_LOCAL_URL).to_string());
+    let models = app.ai.local_models(url.trim_end_matches('/')).await;
+    Json(json!({"url": url, "reachable": models.is_some(), "models": models.unwrap_or_default()}))
 }
 
 async fn events(State(app): State<App>) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
